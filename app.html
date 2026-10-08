@@ -40,12 +40,16 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 14</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 15</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
 <div class="row">
   <input id="schedFile" type="file" accept=".xml,.csv,.txt" title="Välj tidplan (CSV eller MS Project XML)">
+</div>
+<div id="savedInfo" class="row" hidden>
+  <span id="savedName" class="muted" style="flex:1"></span>
+  <button id="btnForget" style="margin:0" title="Ta bort den sparade tidplanen från webbläsaren">Glöm</button>
 </div>
 <div class="muted" style="margin-bottom:6px">Du kan också dra filen hit, eller klistra in rader kopierade från Excel/Powerproject:</div>
 <textarea id="paste" rows="3" placeholder="Klistra in här (med rubrikraden: Aktivitet, Start, Slut, 4D)"></textarea>
@@ -100,7 +104,7 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 14;
+const VERSION = 15;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };          // används bara av testknapparna
 const COLOR_ACTIVE = { r: 217, g: 43, b: 43, a: 255 };   // pågår: rött
@@ -162,6 +166,8 @@ async function connect() {
     const project = await API.project.getProject();
     setStatus('Ansluten till projekt: ' + (project && project.name));
     log('ansluten', { projekt: project && project.name, version: VERSION });
+    if (project && project.id) scheduleKey = '4d.schedule.' + project.id;
+    if (!tasks.length) restoreSchedule();
     $('btnLink').disabled = !tasks.length;
     link();
   } catch (e) {
@@ -755,8 +761,40 @@ function renderTasks() {
 
 function openSchedule(name, text) {
   try { loadSchedule(name, text); }
-  catch (err) { log('tidplan: FEL –', err.message); setStatus(`Kunde inte läsa ${name}: ${err.message}`); }
+  catch (err) { log('tidplan: FEL –', err.message); return setStatus(`Kunde inte läsa ${name}: ${err.message}`); }
+  saveSchedule(name, text);
 }
+
+/* ---- Tidplanen sparas i webbläsaren, per Trimble-projekt, och läses in igen när tillägget öppnas ---- */
+let scheduleKey = '4d.schedule';
+function saveSchedule(name, text) {
+  const saved = { name, text, saved: fmt(new Date()) };
+  try { localStorage.setItem(scheduleKey, JSON.stringify(saved)); showSaved(saved); }
+  catch (e) {
+    log('tidplanen kunde inte sparas:', errText(e));
+    showSaved(null);
+    setStatus($('status').textContent + ' Obs: tidplanen kunde inte sparas i webbläsaren och behöver läsas in igen nästa gång.');
+  }
+}
+function showSaved(saved) {
+  $('savedInfo').hidden = !saved;
+  if (saved) $('savedName').textContent = `Sparad tidplan: ${saved.name} (inläst ${saved.saved})`;
+}
+function restoreSchedule() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(scheduleKey) || 'null'); } catch {}
+  if (!saved || !saved.text) return;
+  try {
+    loadSchedule(saved.name, saved.text);
+    showSaved(saved);
+    log(`sparad tidplan från ${saved.saved} återläst`);
+  } catch (err) { log('sparad tidplan gick inte att läsa:', err.message); }
+}
+$('btnForget').onclick = () => {
+  try { localStorage.removeItem(scheduleKey); } catch {}
+  showSaved(null);
+  setStatus('Den sparade tidplanen är borttagen. Den som är inläst nu ligger kvar tills panelen stängs.');
+};
 $('schedFile').addEventListener('change', async e => {
   const f = e.target.files[0];
   if (f) openSchedule(f.name, decode(await f.arrayBuffer()));
@@ -889,7 +927,7 @@ $('btnCopy').onclick = () => navigator.clipboard.writeText($('log').textContent)
   () => log('kunde inte kopiera – markera texten och kopiera för hand'));
 
 // Åtkomst från konsolen vid vidareutveckling och test
-window.fourD = { get tasks() { return tasks; }, get views() { return views; }, set views(v) { views = v; }, captured, loadSchedule, matchViews, applyTime,
+window.fourD = { get tasks() { return tasks; }, get views() { return views; }, set views(v) { views = v; }, captured, loadSchedule, openSchedule, restoreSchedule, matchViews, applyTime,
                  set api(a) { API = a; }, get applied() { return applied; } };
 connect();
 </script>
