@@ -25,9 +25,12 @@
   #tasks .name { overflow-wrap: anywhere; }
   #tasks .sub { color: var(--muted); font-size: 11px; }
   #tasks input { width: 80px; }
+  #tasks input.edited { border-color: #c98a00; background: #fff8e1; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #9aa3ae; background: #fff; margin-top: 4px; }
-  .dot.s1 { background: #d92b2b; border-color: #d92b2b; }
-  .dot.s2 { background: #969aa0; border-color: #969aa0; }
+  .dot.s1 { background: #eb0000; border-color: #eb0000; }
+  .dot.s2 { background: #d7dade; border-color: #9aa3ae; }
+  .dot { border-style: dashed; }
+  .dot.s1, .dot.s2 { border-style: solid; }
   #slider { width: 100%; }
   .view { display: flex; gap: 6px; align-items: center; padding: 3px 0; border-bottom: 1px solid #eef0f3; }
   .view span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -40,7 +43,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 15</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 16</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -62,6 +65,11 @@
   <input id="prop" type="text" value="Name" style="width:110px" title="Egenskapen i objektens metadata som värdena söks i. Tomt = sök i alla egenskaper.">
 </div>
 <div class="muted">Värdet i kolumnen <b>Kommentarer</b> söks i objektens metadata, i egenskapen ovan. Flera värden skiljs med <code>;</code>. <code>*</code> är jokertecken, och <code>Egenskap=värde</code> söker i en annan egenskap för just det värdet. Värdet matchas också mot namn på laddade modeller (<code>W43</code> → WEEK 43.ifc). En sparad vy anges med <code>Vy=namn</code>.</div>
+<div id="editsInfo" class="row" style="margin-top:8px" hidden>
+  <span id="editsCount" class="muted" style="flex:1"></span>
+  <button id="btnUndoEdits" style="margin:0" title="Gå tillbaka till värdena i tidplansfilen" hidden>Ångra ändringar</button>
+  <button id="btnExport" style="margin:0" title="Ladda ned tidplanen med ändrade värden som CSV">Ladda ned</button>
+</div>
 <table id="tasks"></table>
 
 <h2>Tid</h2>
@@ -104,11 +112,11 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 15;
+const VERSION = 16;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };          // används bara av testknapparna
-const COLOR_ACTIVE = { r: 217, g: 43, b: 43, a: 255 };   // pågår: rött
-const COLOR_DONE = { r: 150, g: 154, b: 160, a: 255 };   // klart: grått
+const COLOR_ACTIVE = { r: 235, g: 0, b: 0, a: 255 };     // pågår: klarrött
+const COLOR_DONE = { r: 215, g: 218, b: 222, a: 255 };   // klart: ljusgrått, så att det röda sticker ut
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const setStatus = s => { $('status').textContent = s; };
 
@@ -273,9 +281,14 @@ function loadSchedule(name, text) {
   const list = /^\s*(﻿)?\s*</.test(text) ? parseMspXml(text) : parseCsv(text.replace(/^﻿/, ''));
   if (!list.length) throw new Error('Inga aktiviteter med start- och slutdatum hittades i filen.');
   schedName = name;
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem('4d.links.' + name) || '{}'); } catch {}
-  tasks = list.map(t => ({ ...t, filter: saved[t.id] ?? t.defFilter, viewIds: [], state: 0 }));
+  // Värden som ändrats i tillägget ligger kvar så länge filens eget värde är detsamma som när ändringen gjordes.
+  // Har värdet ändrats i en ny export gäller filen.
+  const edits = readEdits(), seen = {};
+  tasks = list.map(t => {
+    const n = seen[t.id] = (seen[t.id] || 0) + 1, key = n > 1 ? `${t.id}#${n}` : t.id;     // samma namn flera gånger: håll isär raderna
+    const e = edits[key], edited = !!e && e.orig === t.defFilter;
+    return { ...t, key, filter: edited ? e.value : t.defFilter, edited, viewIds: [], state: 0 };
+  });
 
   // Tidslinjen går från dagens datum (eller första aktiviteten om den redan startat) till sista slutdatum, och börjar på idag.
   const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -325,7 +338,7 @@ function matchViews() {
   for (const t of tasks) {
     const modelTests = filterValues(t).map(nameMatcher), viewTests = viewValues(t).map(nameMatcher);
     const hit = views.filter(v => (v.kind === 'vy' ? viewTests : modelTests).some(test => test(v.name || '')));
-    const metaId = 'p:' + t.id, meta = count(captured.get(metaId));
+    const metaId = 'p:' + t.key, meta = count(captured.get(metaId));
     t.viewIds = hit.map(v => v.id).concat(meta ? [metaId] : []);
     const parts = hit.map(v => `${v.name} (${v.kind}${captured.has(v.id) ? ', ' + count(captured.get(v.id)) + ' objekt' : ''})`);
     if (meta) parts.unshift(`metadata (${meta} objekt)`);
@@ -445,7 +458,7 @@ async function linkMetadata(all) {
       }
     }
   }
-  for (const [t, m] of found) captured.set('p:' + t.id, [...m].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds })));
+  for (const [t, m] of found) captured.set('p:' + t.key,[...m].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds })));
   log(`  metadata (egenskap: ${prop || 'alla'}): ${found.size} av ${tasks.length} aktiviteter fick träff`);
   metaHint = '';
   if (prop) {
@@ -747,17 +760,57 @@ function renderTasks() {
       Object.assign(document.createElement('div'), { className: 'name', textContent: t.name }),
       Object.assign(document.createElement('div'), { className: 'sub', textContent: `${fmt(t.start)} – ${fmt(new Date(t.finish - 1))}` }),
       t.sub);
-    const inp = Object.assign(document.createElement('input'), { type: 'text', value: t.filter, placeholder: 'värde', title: t.filter });
+    const inp = Object.assign(document.createElement('input'), { type: 'text', value: t.filter, placeholder: 'värde' });
+    const mark = () => {
+      inp.classList.toggle('edited', t.edited);
+      inp.title = t.edited ? `Ändrat i tillägget. I filen: ${t.defFilter || '(tomt)'}` : t.filter;
+    };
+    mark();
     inp.addEventListener('change', () => {
       t.filter = inp.value.trim();
-      try { localStorage.setItem('4d.links.' + schedName, JSON.stringify(Object.fromEntries(tasks.filter(x => x.filter).map(x => [x.id, x.filter])))); } catch {}
+      t.edited = t.filter !== t.defFilter;
+      const edits = readEdits();
+      if (t.edited) edits[t.key] = { orig: t.defFilter, value: t.filter }; else delete edits[t.key];
+      const ok = writeEdits(edits);
+      mark();
+      showEdits();
       matchViews();
       applied = null;
       if (API) link(); else applyTime();       // metadatan är redan inläst, så omkopplingen går fort
+      if (!ok) setStatus('Ändringen gäller nu, men kunde inte sparas i webbläsaren.');
     });
     tr.insertCell().append(inp);
   }
+  showEdits();
 }
+
+/* ---- Värden som ändrats i tillägget: sparas per projekt och läggs ovanpå tidplansfilen ---- */
+const editsKey = () => scheduleKey.replace('4d.schedule', '4d.edits');
+function readEdits() { try { return JSON.parse(localStorage.getItem(editsKey()) || '{}') || {}; } catch { return {}; } }
+function writeEdits(edits) { try { localStorage.setItem(editsKey(), JSON.stringify(edits)); return true; } catch { return false; } }
+function showEdits() {
+  const n = tasks.filter(t => t.edited).length;
+  $('editsInfo').hidden = !tasks.length;
+  $('editsCount').textContent = n ? `${n} värde${n > 1 ? 'n' : ''} ändrat i tillägget (sparas automatiskt)` : 'Ändringar i värdefälten sparas automatiskt.';
+  $('btnUndoEdits').hidden = !n;
+}
+$('btnUndoEdits').onclick = () => {
+  writeEdits({});
+  for (const t of tasks) { t.filter = t.defFilter; t.edited = false; }
+  renderTasks();
+  matchViews();
+  applied = null;
+  if (API) link(); else applyTime();
+};
+// Tidplanen med de ändrade värdena som CSV, i samma form som tillägget läser in
+$('btnExport').onclick = () => {
+  const q = s => (/[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const rows = [['ID', 'Aktivitet', 'Start', 'Slut', 'Kommentarer'], ...tasks.map(t => [t.id, t.name, fmt(t.start), fmt(new Date(t.finish - 1)), t.filter])];
+  const blob = new Blob(['﻿' + rows.map(r => r.map(q).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: (schedName.replace(/\.[^.]+$/, '') || 'tidplan') + ' - med ändringar.csv' });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
 
 function openSchedule(name, text) {
   try { loadSchedule(name, text); }
