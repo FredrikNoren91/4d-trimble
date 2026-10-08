@@ -13,7 +13,9 @@
   button, .btn { font: inherit; padding: 4px 9px; border: 1px solid #b9c0ca; background: #fff; border-radius: 4px; cursor: pointer; margin: 0 4px 4px 0; display: inline-block; }
   button:hover, .btn:hover { background: #eef1f5; }
   button:disabled { opacity: .5; cursor: default; }
-  input[type=file] { display: none; }
+  input[type=file] { font: inherit; max-width: 100%; }
+  textarea { font: 12px/1.35 Consolas, monospace; width: 100%; padding: 4px 6px; border: 1px solid #b9c0ca; border-radius: 4px; resize: vertical; margin-bottom: 6px; }
+  body.drag { outline: 3px dashed var(--active); outline-offset: -6px; }
   input[type=text], input[type=date], select { font: inherit; padding: 3px 6px; border: 1px solid #b9c0ca; border-radius: 4px; }
   .muted { color: var(--muted); }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
@@ -38,12 +40,17 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D</h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 3</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
 <div class="row">
-  <label class="btn">Öppna tidplan…<input id="schedFile" type="file" accept=".xml,.csv,.txt"></label>
+  <input id="schedFile" type="file" accept=".xml,.csv,.txt" title="Välj tidplan (CSV eller MS Project XML)">
+</div>
+<div class="muted" style="margin-bottom:6px">Du kan också dra filen hit, eller klistra in rader kopierade från Excel/Powerproject:</div>
+<textarea id="paste" rows="3" placeholder="Klistra in här (med rubrikraden: Aktivitet, Start, Slut, 4D)"></textarea>
+<div class="row">
+  <button id="btnPaste">Läs in det inklistrade</button>
   <button id="btnLink" disabled title="Hämtar projektets vyer och läser in objekten i de vyer som är kopplade till en aktivitet">Läs in kopplade vyer</button>
 </div>
 <div class="muted">Varje aktivitet kopplas till en vy via namnet, t.ex. <code>W43</code> → vyn WEEK 43. Flera vyer: <code>W43|W44</code>.</div>
@@ -388,12 +395,27 @@ function renderTasks() {
   }
 }
 
+function openSchedule(name, text) {
+  try { loadSchedule(name, text); }
+  catch (err) { log('tidplan: FEL –', err.message); setStatus(`Kunde inte läsa ${name}: ${err.message}`); }
+}
 $('schedFile').addEventListener('change', async e => {
   const f = e.target.files[0];
-  if (!f) return;
-  try { loadSchedule(f.name, decode(await f.arrayBuffer())); }
-  catch (err) { log('tidplan: FEL –', err.message); setStatus(`Kunde inte läsa ${f.name}: ${err.message}`); }
-  e.target.value = '';
+  if (f) openSchedule(f.name, decode(await f.arrayBuffer()));
+});
+$('btnPaste').onclick = () => {
+  const text = $('paste').value.trim();
+  if (!text) return setStatus('Klistra först in raderna i rutan.');
+  openSchedule('inklistrad tidplan', text);
+};
+// Dra och släpp en tidplansfil var som helst i panelen
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drag'); });
+addEventListener('dragleave', () => document.body.classList.remove('drag'));
+addEventListener('drop', async e => {
+  e.preventDefault();
+  document.body.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f) openSchedule(f.name, decode(await f.arrayBuffer()));
 });
 $('slider').addEventListener('input', applyTime);
 $('date').addEventListener('change', () => {
