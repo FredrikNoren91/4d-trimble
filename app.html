@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 10</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 11</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -57,7 +57,7 @@
   <span>Sök i egenskap</span>
   <input id="prop" type="text" value="Name" style="width:110px" title="Egenskapen i objektens metadata som värdena söks i. Tomt = sök i alla egenskaper.">
 </div>
-<div class="muted">Värdet i kolumnen <b>Kommentarer</b> söks i objektens metadata, i egenskapen ovan. Flera värden skiljs med <code>;</code>. <code>*</code> är jokertecken, och <code>Egenskap=värde</code> söker i en annan egenskap för just det värdet. Värdet matchas också mot namn på laddade modeller och vyer (<code>W43</code> → WEEK 43.ifc).</div>
+<div class="muted">Värdet i kolumnen <b>Kommentarer</b> söks i objektens metadata, i egenskapen ovan. Flera värden skiljs med <code>;</code>. <code>*</code> är jokertecken, och <code>Egenskap=värde</code> söker i en annan egenskap för just det värdet. Värdet matchas också mot namn på laddade modeller (<code>W43</code> → WEEK 43.ifc). En sparad vy anges med <code>Vy=namn</code>.</div>
 <table id="tasks"></table>
 
 <h2>Tid</h2>
@@ -98,7 +98,7 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 10;
+const VERSION = 11;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -120,7 +120,7 @@ let day0 = null;
    ============================================================ */
 function log(...parts) {
   const text = parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p, null, 1))).join(' ');
-  $('log').textContent += `[${new Date().toLocaleTimeString('sv')}] ${text.length > 1500 ? text.slice(0, 1500) + ' …' : text}\n`;
+  $('log').textContent += `[${new Date().toLocaleTimeString('sv')}] ${text.length > 5000 ? text.slice(0, 5000) + ' …' : text}\n`;
   $('log').scrollTop = $('log').scrollHeight;
 }
 // Kör ett steg, mät tiden och skriv fel i loggen i stället för att tappa dem
@@ -298,13 +298,17 @@ function nameMatcher(text) {
 }
 
 // Kopplingsfältets värden, åtskilda med ; (eller |)
-const filterValues = t => t.filter.replace(/^vy\s*=/i, '').split(/[;|]/).map(s => s.trim()).filter(Boolean);
+// Ett värde som börjar med "Vy=" pekar på en sparad vy; övriga söks i metadatan och bland modellnamnen.
+const allValues = t => t.filter.split(/[;|]/).map(s => s.trim()).filter(Boolean);
+const filterValues = t => allValues(t).filter(v => !/^vy\s*=/i.test(v));
+const viewValues = t => allValues(t).filter(v => /^vy\s*=/i.test(v)).map(v => v.replace(/^vy\s*=/i, '').trim());
+const errText = e => (e && e.message) || (typeof e === 'string' ? e : JSON.stringify(e));
 let linkedOnce = false;
 
 function matchViews() {
   for (const t of tasks) {
-    const tests = filterValues(t).map(nameMatcher);
-    const hit = views.filter(v => tests.some(test => test(v.name || '')));
+    const modelTests = filterValues(t).map(nameMatcher), viewTests = viewValues(t).map(nameMatcher);
+    const hit = views.filter(v => (v.kind === 'vy' ? viewTests : modelTests).some(test => test(v.name || '')));
     const metaId = 'p:' + t.id, meta = count(captured.get(metaId));
     t.viewIds = hit.map(v => v.id).concat(meta ? [metaId] : []);
     const parts = hit.map(v => `${v.name} (${v.kind}${captured.has(v.id) ? ', ' + count(captured.get(v.id)) + ' objekt' : ''})`);
@@ -331,14 +335,45 @@ function flattenProps(o) {
   return vals;
 }
 
+// Trimble har två sätt att lämna ut metadata; det första som fungerar används sedan för resten
+const propSources = [
+  { name: 'getObjectProperties', get: (modelId, ids) => API.viewer.getObjectProperties(modelId, ids) },
+  { name: 'getObjects med loadProperties', get: async (modelId, ids) => {
+      const r = await API.viewer.getObjects({ modelObjectIds: [{ modelId, objectRuntimeIds: ids }], output: { loadProperties: true } });
+      return (r || []).flatMap(m => m.objects || []);
+    } },
+];
+let propSource = null;
+
+async function fetchProps(modelId, ids) {
+  let lastErr;
+  for (const src of propSource ? [propSource] : propSources) {
+    try {
+      const r = await src.get(modelId, ids);
+      if (!Array.isArray(r) || !r.length) throw new Error('tomt svar: ' + String(JSON.stringify(r)).slice(0, 200));
+      if (!r.some(o => o && (o.properties || o.product))) throw new Error('svar utan egenskaper: ' + JSON.stringify(r[0]).slice(0, 200));
+      if (!propSource) { propSource = src; log(`  metadata hämtas med ${src.name}`); }
+      return r;
+    } catch (e) { lastErr = e; log(`  ${src.name} (${ids.length} objekt): FEL – ${errText(e)}`); }
+  }
+  throw new Error('Trimble lämnade inte ut någon metadata (' + errText(lastErr) + ')');
+}
+
 async function modelProps(modelId, ids) {
   const key = modelId + ':' + ids.length;
   if (propCache.has(key)) return propCache.get(key);
   const out = [], t0 = performance.now();
-  for (let i = 0; i < ids.length; i += 500) {
+  let size = 200;
+  for (let i = 0; i < ids.length; i += size) {
     setStatus(`Läser metadata… ${i} av ${ids.length} objekt`);
-    const chunk = await API.viewer.getObjectProperties(modelId, ids.slice(i, i + 500));
-    if (!i && chunk[0]) log('  exempel på metadata:', chunk[0]);
+    let chunk;
+    try { chunk = await fetchProps(modelId, ids.slice(i, i + size)); }
+    catch (e) {
+      if (size <= 20) throw e;
+      size = 20;                                   // försök igen med mindre portioner
+      chunk = await fetchProps(modelId, ids.slice(i, i + size));
+    }
+    if (!i) log('  exempel på metadata:', chunk[0]);
     for (const o of chunk) out.push({ id: o.id, vals: flattenProps(o) });
   }
   log(`  metadata för modell ${modelId}: ${out.length} objekt (${Math.round(performance.now() - t0)} ms)`);
@@ -369,16 +404,24 @@ async function linkMetadata(all) {
     else { const k = v.toLowerCase(); if (!exact.has(k)) exact.set(k, []); exact.get(k).push(t); }
   }
   const found = new Map();                   // aktivitet -> modell -> objekt-id
+  const seen = new Map(), where = new Set(), names = new Set();   // för loggen: vilka värden egenskapen faktiskt har
+  let total = 0, withProp = 0;
   for (const mo of all) {
     const ids = (mo.objects || []).map(o => o.id);
     if (!ids.length) continue;
     for (const o of await modelProps(mo.modelId, ids)) {
-      let hit = null;
+      let hit = null, has = false;
+      total++;
       for (const s of o.vals) {
-        const cut = s.indexOf('\u0001');
-        if (inProp(s.slice(0, cut))) for (const t of exact.get(s.slice(cut + 1)) || []) (hit ??= new Set()).add(t);
+        const cut = s.indexOf('\u0001'), name = s.slice(0, cut), value = s.slice(cut + 1);
+        if (names.size < 150) names.add(name);
+        if (inProp(name)) {
+          for (const t of exact.get(value) || []) (hit ??= new Set()).add(t);
+          if (prop) { has = true; where.add(name); seen.set(value, (seen.get(value) || 0) + 1); }
+        }
         for (const sl of slow) if (!(hit && hit.has(sl.t)) && sl.test(s)) (hit ??= new Set()).add(sl.t);
       }
+      if (has) withProp++;
       if (hit) for (const t of hit) {
         let m = found.get(t); if (!m) found.set(t, m = new Map());
         let a = m.get(mo.modelId); if (!a) m.set(mo.modelId, a = []);
@@ -388,7 +431,17 @@ async function linkMetadata(all) {
   }
   for (const [t, m] of found) captured.set('p:' + t.id, [...m].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds })));
   log(`  metadata (egenskap: ${prop || 'alla'}): ${found.size} av ${tasks.length} aktiviteter fick träff`);
+  metaHint = '';
+  if (prop) {
+    const top = [...seen].sort((a, b) => b[1] - a[1]);
+    log(`  egenskapen "${prop}" finns på ${withProp} av ${total} objekt, under: ${[...where].join(', ') || '–'}`);
+    log(`  ${top.length} olika värden, vanligast: ${top.slice(0, 40).map(([v, n]) => `${v} (${n})`).join(' | ')}`);
+    if (!withProp) log(`  egenskapsnamn som finns i metadatan: ${[...names].join(', ')}`);
+    metaHint = !withProp ? ` Egenskapen "${$('prop').value.trim()}" finns inte i metadatan.`
+      : ` Exempel på värden i "${$('prop').value.trim()}": ${top.slice(0, 6).map(([v]) => v).join(', ')}.`;
+  }
 }
+let metaHint = '';
 
 const viewTarget = v => ({ id: 'v:' + v.id, name: v.name || '', kind: 'vy', view: v });
 const modelTarget = m => ({ id: 'm:' + m.id, name: (m.name || '').replace(/\.[a-z0-9]{2,6}$/i, ''), kind: 'modell', model: m });
@@ -437,11 +490,12 @@ async function link() {
     await applyTime();
     const linked = tasks.filter(t => t.viewIds.some(id => count(captured.get(id))));
     const missing = tasks.filter(t => t.filter && !linked.includes(t));
-    setStatus(!linked.length ? 'Ingen aktivitet fick träff i metadata, modellnamn eller vyer.'
+    setStatus(!linked.length ? 'Ingen aktivitet fick träff i metadata, modellnamn eller vyer.' + metaHint
       : `${linked.length} av ${tasks.length} aktiviteter kopplade, ${[...captured.values()].reduce((n, ids) => n + count(ids), 0)} objekt.` +
         (missing.length ? ` Utan träff: ${missing.map(t => t.name).join(', ').slice(0, 200)}.` : ''));
   } catch (e) {
-    setStatus('Kunde inte läsa in kopplingarna: ' + (e && e.message ? e.message : e));
+    log('koppling: FEL –', errText(e));
+    setStatus('Kunde inte läsa in kopplingarna: ' + errText(e));
   } finally { linking = false; linkedAt = Date.now(); $('btnLink').disabled = false; }
 }
 $('btnLink').onclick = link;
