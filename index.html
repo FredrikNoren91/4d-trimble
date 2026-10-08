@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 3</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 4</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -432,6 +432,11 @@ $('play').addEventListener('click', () => {
   const s = $('slider');
   if (s.disabled) return;
   if (+s.value >= +s.max) s.value = 0;
+  // Uppspelning visar bara det tidplanen berör: släck allt i alla laddade modeller och tänd sedan de kopplade vyerna
+  if (API && !captured.size) setStatus('Inga vyer är inlästa – tryck "Läs in kopplade vyer" först, annars händer inget i 3D-vyn.');
+  $('showUnlinked').checked = false;
+  applied = null;
+  applyTime();
   $('play').textContent = '⏸';
   timer = setInterval(() => {
     s.value = Math.min(+s.max, +s.value + +$('step').value);
