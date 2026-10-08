@@ -26,8 +26,8 @@
   #tasks .sub { color: var(--muted); font-size: 11px; }
   #tasks input { width: 80px; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #9aa3ae; background: #fff; margin-top: 4px; }
-  .dot.s1 { background: var(--active); border-color: var(--active); }
-  .dot.s2 { background: #5b6675; border-color: #5b6675; }
+  .dot.s1 { background: #d92b2b; border-color: #d92b2b; }
+  .dot.s2 { background: #969aa0; border-color: #969aa0; }
   #slider { width: 100%; }
   .view { display: flex; gap: 6px; align-items: center; padding: 3px 0; border-bottom: 1px solid #eef0f3; }
   .view span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 13</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 14</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -100,9 +100,11 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 13;
+const VERSION = 14;
 const $ = id => document.getElementById(id);
-const GREEN = { r: 46, g: 158, b: 79, a: 255 };
+const GREEN = { r: 46, g: 158, b: 79, a: 255 };          // används bara av testknapparna
+const COLOR_ACTIVE = { r: 217, g: 43, b: 43, a: 255 };   // pågår: rött
+const COLOR_DONE = { r: 150, g: 154, b: 160, a: 255 };   // klart: grått
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const setStatus = s => { $('status').textContent = s; };
 
@@ -708,11 +710,12 @@ async function pushStates() {
     await STRATEGIES[strategy].show(toSel(started));
   }
 
-  // Färg: pågående grönt, övrigt i modellens egen färg
+  // Färg: pågående rött, klart grått. Okopplade objekt behåller modellens egen färg.
   if (first) await API.viewer.setObjectState(undefined, { color: 'reset' });
-  const toReset = toSel(minus(prev.active, active)), toGreen = toSel(first ? active : minus(active, prev.active));
-  if (toReset.length) await API.viewer.setObjectState({ modelObjectIds: toReset }, { color: 'reset' });
-  if (toGreen.length) await API.viewer.setObjectState({ modelObjectIds: toGreen }, { color: GREEN });
+  const done = minus(started, active), prevDone = minus(prev.started, prev.active);
+  const toDone = toSel(first ? done : minus(done, prevDone)), toActive = toSel(first ? active : minus(active, prev.active));
+  if (toDone.length) await API.viewer.setObjectState({ modelObjectIds: toDone }, { color: COLOR_DONE });
+  if (toActive.length) await API.viewer.setObjectState({ modelObjectIds: toActive }, { color: COLOR_ACTIVE });
   applied = { started, active };
   lastShown = size(started);
 }
