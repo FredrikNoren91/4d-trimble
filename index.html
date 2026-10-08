@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 4</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 5</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -51,9 +51,9 @@
 <textarea id="paste" rows="3" placeholder="Klistra in här (med rubrikraden: Aktivitet, Start, Slut, 4D)"></textarea>
 <div class="row">
   <button id="btnPaste">Läs in det inklistrade</button>
-  <button id="btnLink" disabled title="Hämtar projektets vyer och läser in objekten i de vyer som är kopplade till en aktivitet">Läs in kopplade vyer</button>
+  <button id="btnLink" disabled title="Matchar aktiviteterna mot laddade modeller och projektets vyer, och läser in objekten i dem">Läs in kopplingar</button>
 </div>
-<div class="muted">Varje aktivitet kopplas till en vy via namnet, t.ex. <code>W43</code> → vyn WEEK 43. Flera vyer: <code>W43|W44</code>.</div>
+<div class="muted">Varje aktivitet kopplas på namn till en laddad modell eller en vy, t.ex. <code>W43</code> → WEEK 43.ifc. Flera: <code>W43|W44</code>.</div>
 <table id="tasks"></table>
 
 <h2>Tid</h2>
@@ -151,7 +151,7 @@ async function connect() {
 
 // Slår på en vy och sparar vilka objekt som syns i den
 async function captureView(v) {
-  await step(`selectView "${v.name}"`, () => API.view.selectView(v.id));
+  await step(`selectView "${v.name}"`, () => API.view.selectView(v.view.id));
   await wait(2000);                                 // ge vyn tid att slå igenom innan vi frågar vad som syns
   const ids = await step('getObjects (synliga i vyn)', visibleObjects);
   captured.set(v.id, ids);
@@ -261,7 +261,7 @@ function loadSchedule(name, text) {
   renderTasks();
   matchViews();
   $('btnLink').disabled = !API;
-  setStatus(`${tasks.length} aktiviteter från ${name}.` + (captured.size ? '' : ' Tryck "Läs in kopplade vyer".'));
+  setStatus(`${tasks.length} aktiviteter från ${name}.` + (captured.size ? '' : ' Tryck "Läs in kopplingar".'));
   applyTime();
 }
 
@@ -286,30 +286,58 @@ function matchViews() {
     const tests = t.filter.replace(/^vy\s*=/i, '').split('|').map(s => s.trim()).filter(Boolean).map(nameMatcher);
     const hit = views.filter(v => tests.some(test => test(v.name || '')));
     t.viewIds = hit.map(v => v.id);
-    if (t.sub) t.sub.textContent = !t.filter ? '' : !views.length ? 'vyer inte hämtade' : !hit.length ? 'ingen vy matchar'
-      : '→ ' + hit.map(v => v.name + (captured.has(v.id) ? ` (${count(captured.get(v.id))})` : '')).join(', ');
+    if (t.sub) t.sub.textContent = !t.filter ? '' : !views.length ? 'kopplingar inte inlästa' : !hit.length ? 'ingen modell eller vy matchar'
+      : '→ ' + hit.map(v => `${v.name} (${v.kind}${captured.has(v.id) ? ', ' + count(captured.get(v.id)) + ' objekt' : ''})`).join(', ');
   }
 }
 
+const viewTarget = v => ({ id: 'v:' + v.id, name: v.name || '', kind: 'vy', view: v });
+const modelTarget = m => ({ id: 'm:' + m.id, name: (m.name || '').replace(/\.[a-z0-9]{2,6}$/i, ''), kind: 'modell', model: m });
+
+async function loadedModels() {
+  let list;
+  try { list = await step('getModels (laddade)', () => API.viewer.getModels('loaded')); }
+  catch { list = await step('getModels', () => API.viewer.getModels()); }
+  for (const m of list) log(`  modell "${m.name}" id=${m.id} versionId=${m.versionId} state=${m.state}`);
+  return list;
+}
+
+// Hämtar laddade modeller och projektets vyer, matchar dem mot aktiviteterna på namn och sparar objekten för varje träff.
 $('btnLink').onclick = async () => {
   $('btnLink').disabled = true;
   try {
-    views = await step('getViews', () => API.view.getViews());
-    log(`  ${views.length} vyer: ${views.map(v => v.name).join(', ')}`);
+    const models = (await loadedModels()).map(modelTarget);
+    let vs = [];
+    try { vs = (await step('getViews', () => API.view.getViews())).map(viewTarget); } catch {}
+    log(`  ${models.length} modeller, ${vs.length} vyer`);
+    views = models.concat(vs);
     matchViews();
     const need = views.filter(v => tasks.some(t => t.viewIds.includes(v.id)));
-    if (!need.length) return setStatus(`${views.length} vyer hämtade, men ingen matchar aktiviteterna.`);
-    let i = 0;
-    for (const v of need) {
-      setStatus(`Läser in vy ${++i} av ${need.length}: ${v.name}…`);
-      await captureView(v);
-      matchViews();
+    if (!need.length) return setStatus(`${models.length} laddade modeller och ${vs.length} vyer hittades, men inget namn matchar aktiviteterna.`);
+
+    // Modeller först: de kräver inget vybyte
+    const needModels = need.filter(v => v.kind === 'modell');
+    if (needModels.length) {
+      setStatus('Läser in objekten i de kopplade modellerna…');
+      const all = await step('getObjects (alla)', () => API.viewer.getObjects());
+      for (const mo of all) log(`  objekt i modell ${mo.modelId}: ${(mo.objects || []).length}`);
+      for (const v of needModels)
+        captured.set(v.id, toIds(all.filter(mo => mo.modelId === v.model.id || mo.modelId === v.model.versionId)));
     }
+    let i = 0;
+    const needViews = need.filter(v => v.kind === 'vy');
+    for (const v of needViews) {
+      setStatus(`Läser in vy ${++i} av ${needViews.length}: ${v.name}…`);
+      await captureView(v);
+    }
+    matchViews();
     applied = null;
     await applyTime();
-    setStatus(`${need.length} vyer inlästa, ${need.reduce((n, v) => n + count(captured.get(v.id)), 0)} objekt kopplade.`);
+    const empty = need.filter(v => !count(captured.get(v.id))).map(v => v.name);
+    setStatus(`${need.length} kopplingar inlästa, ${need.reduce((n, v) => n + count(captured.get(v.id)), 0)} objekt.` +
+      (empty.length ? ` Obs: inga objekt hittades i ${empty.join(', ')}.` : ''));
   } catch (e) {
-    setStatus('Kunde inte läsa in vyerna – se loggen under "Test och logg".');
+    setStatus('Kunde inte läsa in kopplingarna: ' + (e && e.message ? e.message : e));
   } finally { $('btnLink').disabled = false; }
 };
 
@@ -339,7 +367,11 @@ async function applyTime() {
   if (busy) { again = true; return; }       // reglaget dras snabbare än 3D-vyn hinner: kör bara senaste läget
   busy = true;
   try { do { again = false; await pushStates(); } while (again); }
-  catch (e) { log('uppdatering av 3D-vyn: FEL –', e && e.message ? e.message : e); }
+  catch (e) {
+    const msg = e && e.message ? e.message : JSON.stringify(e);
+    log('uppdatering av 3D-vyn: FEL –', msg);
+    setStatus('Kunde inte ändra 3D-vyn: ' + msg);
+  }
   finally { busy = false; }
 }
 
@@ -387,7 +419,7 @@ function renderTasks() {
       t.filter = inp.value.trim();
       try { localStorage.setItem('4d.links.' + schedName, JSON.stringify(Object.fromEntries(tasks.filter(x => x.filter).map(x => [x.id, x.filter])))); } catch {}
       matchViews();
-      if (t.viewIds.some(id => !captured.has(id))) setStatus('Tryck "Läs in kopplade vyer" för att läsa in den nya kopplingen.');
+      if (t.viewIds.some(id => !captured.has(id))) setStatus('Tryck "Läs in kopplingar" för att läsa in den nya kopplingen.');
       applied = null;
       applyTime();
     });
@@ -433,7 +465,8 @@ $('play').addEventListener('click', () => {
   if (s.disabled) return;
   if (+s.value >= +s.max) s.value = 0;
   // Uppspelning visar bara det tidplanen berör: släck allt i alla laddade modeller och tänd sedan de kopplade vyerna
-  if (API && !captured.size) setStatus('Inga vyer är inlästa – tryck "Läs in kopplade vyer" först, annars händer inget i 3D-vyn.');
+  if (API && !captured.size) setStatus('Inga kopplingar är inlästa – tryck "Läs in kopplingar" först, annars händer inget i 3D-vyn.');
+  else if (API) setStatus(`Spelar upp: ${[...captured.values()].reduce((n, ids) => n + count(ids), 0)} objekt styrs av tidplanen, allt annat släcks.`);
   $('showUnlinked').checked = false;
   applied = null;
   applyTime();
@@ -464,11 +497,12 @@ $('btnShow').onclick  = () => step('visa allt', () => API.viewer.setObjectState(
 $('btnGreen').onclick = () => step('färga markerade', () => API.viewer.setObjectState({ selected: true }, { color: GREEN }));
 
 $('btnViews').onclick = async () => {
-  views = await step('getViews', () => API.view.getViews());
-  log(`  ${views.length} vyer`);
+  const vs = (await step('getViews', () => API.view.getViews())).map(viewTarget);
+  log(`  ${vs.length} vyer`);
+  views = views.filter(v => v.kind !== 'vy').concat(vs);
   matchViews();
   $('views').replaceChildren();
-  for (const v of views) {
+  for (const v of vs) {
     const row = Object.assign(document.createElement('div'), { className: 'view' });
     const name = Object.assign(document.createElement('span'), { textContent: v.name || v.id });
     const light = Object.assign(document.createElement('button'), { textContent: 'Tänd', disabled: !count(captured.get(v.id)) });
