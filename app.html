@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 8</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 9</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -53,7 +53,7 @@
   <button id="btnPaste">Läs in det inklistrade</button>
   <button id="btnLink" disabled title="Matchar aktiviteterna mot laddade modeller och projektets vyer, och läser in objekten i dem">Läs in kopplingar</button>
 </div>
-<div class="muted">Varje aktivitet kopplas på namn till en laddad modell eller en vy, t.ex. <code>W43</code> → WEEK 43.ifc. Flera: <code>W43|W44</code>.</div>
+<div class="muted">Värdet i kolumnen <b>Kommentarer</b> söks i objektens metadata. Flera värden skiljs med <code>;</code>. Begränsa till en egenskap med <code>Egenskap=värde</code>, <code>*</code> är jokertecken. Värdet matchas också mot namn på laddade modeller och vyer (<code>W43</code> → WEEK 43.ifc).</div>
 <table id="tasks"></table>
 
 <h2>Tid</h2>
@@ -94,7 +94,7 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 8;
+const VERSION = 9;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -186,6 +186,7 @@ function span(startStr, finishStr) {
   return { start: a.d, finish: fin };
 }
 const RE_4D = /^(4d|filter|4d-filter|4d-kod|vy)$/i;
+const RE_KOMMENTAR = /^(kommentar|kommentarer|comments?|anteckning|anteckningar|notes?)$/i;
 
 function parseMspXml(text) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
@@ -202,7 +203,7 @@ function parseMspXml(text) {
     if (!sp || !name) continue;
     let def = '';
     for (const a of kids(t, 'ExtendedAttribute')) if (fieldId4d && txt(a, 'FieldID') === fieldId4d) def = txt(a, 'Value');
-    out.push({ id: txt(t, 'UID') || txt(t, 'ID') || name, name, ...sp, defFilter: def });
+    out.push({ id: txt(t, 'UID') || txt(t, 'ID') || name, name, ...sp, defFilter: txt(t, 'Notes') || def });
   }
   return out;
 }
@@ -227,14 +228,16 @@ function parseCsv(text) {
   const cStart = col(/^(start|startdatum|starttid|tidig start|early start)$/i);
   const cFin = col(/^(slut|slutdatum|sluttid|färdig|finish|end|tidigt slut|early finish)$/i);
   const cId = col(/^(id|uid|unikt id|unique id|aktivitets-id|aktivitetsid)$/i);
-  const c4d = col(RE_4D);
+  const cKom = col(RE_KOMMENTAR), c4d = cKom >= 0 ? cKom : col(RE_4D);     // Kommentarer går före en 4D-kolumn
   if (cName < 0 || cStart < 0)
     throw new Error(`Hittar inte kolumnerna Namn och Start. Kolumner i filen: ${head.join(', ')}`);
   const out = [];
   for (const r of rows) {
     const sp = span(r[cStart], cFin >= 0 ? r[cFin] : ''), name = (r[cName] || '').trim();
     if (!sp || !name) continue;
-    out.push({ id: (cId >= 0 && (r[cId] || '').trim()) || name, name, ...sp, defFilter: c4d >= 0 ? (r[c4d] || '').trim() : '' });
+    // Ligger kopplingskolumnen sist och värdet innehåller oskyddade ; har raden fått extra celler: sätt ihop dem igen
+    const link = c4d < 0 ? '' : c4d === head.length - 1 && delim === ';' ? r.slice(c4d).join(';') : r[c4d] || '';
+    out.push({ id: (cId >= 0 && (r[cId] || '').trim()) || name, name, ...sp, defFilter: link.replace(/;+\s*$/, '').trim() });
   }
   return out;
 }
@@ -290,14 +293,93 @@ function nameMatcher(text) {
   };
 }
 
+// Kopplingsfältets värden, åtskilda med ; (eller |)
+const filterValues = t => t.filter.replace(/^vy\s*=/i, '').split(/[;|]/).map(s => s.trim()).filter(Boolean);
+let linkedOnce = false;
+
 function matchViews() {
   for (const t of tasks) {
-    const tests = t.filter.replace(/^vy\s*=/i, '').split('|').map(s => s.trim()).filter(Boolean).map(nameMatcher);
+    const tests = filterValues(t).map(nameMatcher);
     const hit = views.filter(v => tests.some(test => test(v.name || '')));
-    t.viewIds = hit.map(v => v.id);
-    if (t.sub) t.sub.textContent = !t.filter ? '' : !views.length ? 'kopplingar inte inlästa' : !hit.length ? 'ingen modell eller vy matchar'
-      : '→ ' + hit.map(v => `${v.name} (${v.kind}${captured.has(v.id) ? ', ' + count(captured.get(v.id)) + ' objekt' : ''})`).join(', ');
+    const metaId = 'p:' + t.id, meta = count(captured.get(metaId));
+    t.viewIds = hit.map(v => v.id).concat(meta ? [metaId] : []);
+    const parts = hit.map(v => `${v.name} (${v.kind}${captured.has(v.id) ? ', ' + count(captured.get(v.id)) + ' objekt' : ''})`);
+    if (meta) parts.unshift(`metadata (${meta} objekt)`);
+    if (t.sub) t.sub.textContent = !t.filter ? '' : !linkedOnce ? 'kopplingar inte inlästa'
+      : !parts.length ? 'ingen träff i metadata, modellnamn eller vyer' : '→ ' + parts.join(', ');
   }
+}
+
+/* ============================================================
+   Koppling aktivitet <-> objekt via metadata (objektens egenskaper)
+   ============================================================ */
+const propCache = new Map();   // modell -> [{ id, vals:["egenskap\u0001värde", …] }], allt i gemener
+
+function flattenProps(o) {
+  const vals = [];
+  const add = (name, v) => { if (v != null && v !== '' && typeof v !== 'object') vals.push(String(name).toLowerCase() + '\u0001' + String(v).trim().toLowerCase()); };
+  add('class', o.class);
+  for (const k in o.product || {}) add(k, o.product[k]);
+  for (const ps of o.properties || []) {
+    const list = Array.isArray(ps.properties) ? ps.properties.map(p => [p.name, p.value]) : Object.entries(ps.properties || {});
+    for (const [name, value] of list) add((ps.name ? ps.name + '.' : '') + name, value);
+  }
+  return vals;
+}
+
+async function modelProps(modelId, ids) {
+  const key = modelId + ':' + ids.length;
+  if (propCache.has(key)) return propCache.get(key);
+  const out = [], t0 = performance.now();
+  for (let i = 0; i < ids.length; i += 500) {
+    setStatus(`Läser metadata… ${i} av ${ids.length} objekt`);
+    const chunk = await API.viewer.getObjectProperties(modelId, ids.slice(i, i + 500));
+    if (!i && chunk[0]) log('  exempel på metadata:', chunk[0]);
+    for (const o of chunk) out.push({ id: o.id, vals: flattenProps(o) });
+  }
+  log(`  metadata för modell ${modelId}: ${out.length} objekt (${Math.round(performance.now() - t0)} ms)`);
+  propCache.set(key, out);
+  return out;
+}
+
+// "värde" letar i alla egenskaper, "Egenskap=värde" i en viss. * är jokertecken.
+function metaMatcher(text) {
+  const eq = text.indexOf('='), key = eq < 0 ? null : text.slice(0, eq).trim().toLowerCase();
+  const re = new RegExp('^' + (eq < 0 ? text : text.slice(eq + 1)).trim().toLowerCase().replace(/[.+?^${}()[\]\\|]/g, '\\$&').replace(/\*/g, '.*') + '$');
+  return s => {
+    const i = s.indexOf('\u0001');
+    if (!re.test(s.slice(i + 1))) return false;
+    const name = s.slice(0, i);
+    return !key || name === key || name.endsWith('.' + key);
+  };
+}
+
+// Letar igenom metadatan i alla laddade modeller efter aktiviteternas värden och sparar träffarna per aktivitet
+async function linkMetadata(all) {
+  const exact = new Map(), slow = [];        // exakta värden slås upp direkt, jokertecken och Egenskap=värde testas ett i taget
+  for (const t of tasks) for (const v of filterValues(t)) {
+    if (v.includes('*') || v.includes('=')) slow.push({ t, test: metaMatcher(v) });
+    else { const k = v.toLowerCase(); if (!exact.has(k)) exact.set(k, []); exact.get(k).push(t); }
+  }
+  const found = new Map();                   // aktivitet -> modell -> objekt-id
+  for (const mo of all) {
+    const ids = (mo.objects || []).map(o => o.id);
+    if (!ids.length) continue;
+    for (const o of await modelProps(mo.modelId, ids)) {
+      let hit = null;
+      for (const s of o.vals) {
+        for (const t of exact.get(s.slice(s.indexOf('\u0001') + 1)) || []) (hit ??= new Set()).add(t);
+        for (const sl of slow) if (!(hit && hit.has(sl.t)) && sl.test(s)) (hit ??= new Set()).add(sl.t);
+      }
+      if (hit) for (const t of hit) {
+        let m = found.get(t); if (!m) found.set(t, m = new Map());
+        let a = m.get(mo.modelId); if (!a) m.set(mo.modelId, a = []);
+        a.push(o.id);
+      }
+    }
+  }
+  for (const [t, m] of found) captured.set('p:' + t.id, [...m].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds })));
+  log(`  metadata: ${found.size} av ${tasks.length} aktiviteter fick träff`);
 }
 
 const viewTarget = v => ({ id: 'v:' + v.id, name: v.name || '', kind: 'vy', view: v });
@@ -323,19 +405,19 @@ async function link() {
     try { vs = (await step('getViews', () => API.view.getViews())).map(viewTarget); } catch {}
     log(`  ${models.length} modeller, ${vs.length} vyer`);
     views = models.concat(vs);
+    linkedOnce = true;
+    for (const k of [...captured.keys()]) if (k.startsWith('p:')) captured.delete(k);    // metadata-träffar räknas om
     matchViews();
     const need = views.filter(v => tasks.some(t => t.viewIds.includes(v.id)));
-    if (!need.length) return setStatus(`${models.length} laddade modeller och ${vs.length} vyer hittades, men inget namn matchar aktiviteterna.`);
 
-    // Modeller först: de kräver inget vybyte
-    const needModels = need.filter(v => v.kind === 'modell');
-    if (needModels.length) {
-      setStatus('Läser in objekten i de kopplade modellerna…');
-      const all = await step('getObjects (alla)', () => API.viewer.getObjects());
-      for (const mo of all) log(`  objekt i modell ${mo.modelId}: ${(mo.objects || []).length}`);
-      for (const v of needModels)
-        captured.set(v.id, toIds(all.filter(mo => mo.modelId === v.model.id || mo.modelId === v.model.versionId)));
-    }
+    setStatus('Läser in objekten i de laddade modellerna…');
+    const all = await step('getObjects (alla)', () => API.viewer.getObjects());
+    for (const mo of all) log(`  objekt i modell ${mo.modelId}: ${(mo.objects || []).length}`);
+
+    // Modeller och metadata först: de kräver inget vybyte
+    for (const v of need.filter(v => v.kind === 'modell'))
+      captured.set(v.id, toIds(all.filter(mo => mo.modelId === v.model.id || mo.modelId === v.model.versionId)));
+    await linkMetadata(all);
     let i = 0;
     const needViews = need.filter(v => v.kind === 'vy');
     for (const v of needViews) {
@@ -345,9 +427,11 @@ async function link() {
     matchViews();
     applied = null;
     await applyTime();
-    const empty = need.filter(v => !count(captured.get(v.id))).map(v => v.name);
-    setStatus(`${need.length} kopplingar inlästa, ${need.reduce((n, v) => n + count(captured.get(v.id)), 0)} objekt.` +
-      (empty.length ? ` Obs: inga objekt hittades i ${empty.join(', ')}.` : ''));
+    const linked = tasks.filter(t => t.viewIds.some(id => count(captured.get(id))));
+    const missing = tasks.filter(t => t.filter && !linked.includes(t));
+    setStatus(!linked.length ? 'Ingen aktivitet fick träff i metadata, modellnamn eller vyer.'
+      : `${linked.length} av ${tasks.length} aktiviteter kopplade, ${[...captured.values()].reduce((n, ids) => n + count(ids), 0)} objekt.` +
+        (missing.length ? ` Utan träff: ${missing.map(t => t.name).join(', ').slice(0, 200)}.` : ''));
   } catch (e) {
     setStatus('Kunde inte läsa in kopplingarna: ' + (e && e.message ? e.message : e));
   } finally { linking = false; linkedAt = Date.now(); $('btnLink').disabled = false; }
@@ -435,14 +519,13 @@ function renderTasks() {
       Object.assign(document.createElement('div'), { className: 'name', textContent: t.name }),
       Object.assign(document.createElement('div'), { className: 'sub', textContent: `${fmt(t.start)} – ${fmt(new Date(t.finish - 1))}` }),
       t.sub);
-    const inp = Object.assign(document.createElement('input'), { type: 'text', value: t.filter, placeholder: 'vy' });
+    const inp = Object.assign(document.createElement('input'), { type: 'text', value: t.filter, placeholder: 'värde', title: t.filter });
     inp.addEventListener('change', () => {
       t.filter = inp.value.trim();
       try { localStorage.setItem('4d.links.' + schedName, JSON.stringify(Object.fromEntries(tasks.filter(x => x.filter).map(x => [x.id, x.filter])))); } catch {}
       matchViews();
-      if (t.viewIds.some(id => !captured.has(id))) setStatus('Tryck "Läs in kopplingar" för att läsa in den nya kopplingen.');
       applied = null;
-      applyTime();
+      if (API) link(); else applyTime();       // metadatan är redan inläst, så omkopplingen går fort
     });
     tr.insertCell().append(inp);
   }
