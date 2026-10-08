@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 5</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 6</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -89,6 +89,7 @@
 </details>
 
 <script>
+const VERSION = 6;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -138,11 +139,12 @@ const visibleObjects = async () => toIds(await API.viewer.getObjects(undefined, 
 async function connect() {
   if (window.parent === window) return setStatus('Den här sidan ska öppnas som tillägg inne i Trimble Connect, inte direkt i webbläsaren.');
   try {
-    API = await TrimbleConnectWorkspace.connect(window.parent, (event, args) => log('händelse:', event), 30000);
+    API = await TrimbleConnectWorkspace.connect(window.parent, (event, args) => { log('händelse:', event); onViewerEvent(event); }, 30000);
     const project = await API.project.getProject();
     setStatus('Ansluten till projekt: ' + (project && project.name));
-    log('ansluten', { projekt: project && project.name });
+    log('ansluten', { projekt: project && project.name, version: VERSION });
     $('btnLink').disabled = !tasks.length;
+    link();
   } catch (e) {
     setStatus('Kunde inte ansluta till Trimble Connect.');
     log('anslutning: FEL –', e && e.message ? e.message : e);
@@ -261,8 +263,10 @@ function loadSchedule(name, text) {
   renderTasks();
   matchViews();
   $('btnLink').disabled = !API;
-  setStatus(`${tasks.length} aktiviteter från ${name}.` + (captured.size ? '' : ' Tryck "Läs in kopplingar".'));
+  log(`tidplan "${name}": ${tasks.length} aktiviteter, kopplingsfält: ${tasks.map(t => t.filter || '–').join(', ').slice(0, 300)}`);
+  setStatus(`${tasks.length} aktiviteter från ${name}.`);
   applyTime();
+  link();                       // koppla direkt mot det som är laddat i 3D-vyn
 }
 
 /* ============================================================
@@ -303,7 +307,10 @@ async function loadedModels() {
 }
 
 // Hämtar laddade modeller och projektets vyer, matchar dem mot aktiviteterna på namn och sparar objekten för varje träff.
-$('btnLink').onclick = async () => {
+let linking = false, linkedAt = 0;
+async function link() {
+  if (!API || !tasks.length || linking) return;
+  linking = true;
   $('btnLink').disabled = true;
   try {
     const models = (await loadedModels()).map(modelTarget);
@@ -338,8 +345,17 @@ $('btnLink').onclick = async () => {
       (empty.length ? ` Obs: inga objekt hittades i ${empty.join(', ')}.` : ''));
   } catch (e) {
     setStatus('Kunde inte läsa in kopplingarna: ' + (e && e.message ? e.message : e));
-  } finally { $('btnLink').disabled = false; }
-};
+  } finally { linking = false; linkedAt = Date.now(); $('btnLink').disabled = false; }
+}
+$('btnLink').onclick = link;
+
+// När modeller laddas in eller ur i 3D-vyn görs kopplingen om av sig själv (inte medan vi själva bläddrar vyer)
+let relinkTimer = null;
+function onViewerEvent(event) {
+  if (event !== 'viewer.onModelStateChanged' || linking || Date.now() - linkedAt < 4000 || !tasks.length) return;
+  clearTimeout(relinkTimer);
+  relinkTimer = setTimeout(link, 2000);
+}
 
 /* ============================================================
    Tid -> status -> synlighet/färg i Trimbles 3D-vy
@@ -459,14 +475,17 @@ $('date').addEventListener('change', () => {
 });
 let timer = null;
 function stop() { clearInterval(timer); timer = null; $('play').textContent = '▶'; }
-$('play').addEventListener('click', () => {
+$('play').addEventListener('click', async () => {
   if (timer) return stop();
   const s = $('slider');
-  if (s.disabled) return;
+  log(`play: tidplan=${tasks.length} aktiviteter, kopplingar=${captured.size}, ansluten=${!!API}`);
+  if (s.disabled) return setStatus('Läs in en tidplan först.');
+  if (API && !captured.size) await link();
+  if (timer) return;
   if (+s.value >= +s.max) s.value = 0;
   // Uppspelning visar bara det tidplanen berör: släck allt i alla laddade modeller och tänd sedan de kopplade vyerna
-  if (API && !captured.size) setStatus('Inga kopplingar är inlästa – tryck "Läs in kopplingar" först, annars händer inget i 3D-vyn.');
-  else if (API) setStatus(`Spelar upp: ${[...captured.values()].reduce((n, ids) => n + count(ids), 0)} objekt styrs av tidplanen, allt annat släcks.`);
+  if (API && !captured.size) return;     // link() har redan skrivit i statusraden varför inget kunde kopplas
+  if (API) setStatus(`Spelar upp: ${[...captured.values()].reduce((n, ids) => n + count(ids), 0)} objekt styrs av tidplanen, allt annat släcks.`);
   $('showUnlinked').checked = false;
   applied = null;
   applyTime();
