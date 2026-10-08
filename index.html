@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4D-test</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font: 13px/1.4 "Segoe UI", system-ui, sans-serif; color: #1c2430; margin: 0; padding: 10px; background: #fff; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #6b7480; margin: 14px 0 6px; }
+  button { font: inherit; padding: 4px 9px; border: 1px solid #b9c0ca; background: #fff; border-radius: 4px; cursor: pointer; margin: 0 4px 4px 0; }
+  button:hover { background: #eef1f5; }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: #6b7480; }
+  .view { display: flex; gap: 6px; align-items: center; padding: 3px 0; border-bottom: 1px solid #eef0f3; }
+  .view span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .view button { margin: 0; }
+  #log { white-space: pre-wrap; font: 11px/1.35 Consolas, monospace; background: #f4f5f7; border: 1px solid #d9dde3; border-radius: 4px;
+         padding: 6px; max-height: 260px; overflow: auto; }
+</style>
+<script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+</head>
+<body>
+<h1>4D-test</h1>
+<div id="status" class="muted">Ansluter till Trimble Connect…</div>
+
+<h2>1. Modeller</h2>
+<button id="btnModels">Räkna objekt i laddade modeller</button>
+
+<h2>2. Tända, släcka, färga</h2>
+<button id="btnHide">Dölj allt</button>
+<button id="btnShow">Visa allt</button>
+<button id="btnGreen">Färga markerade gröna</button>
+<button id="btnReset">Återställ</button>
+
+<h2>3. Vyer</h2>
+<div class="muted">"Läs in" slår på vyn och sparar vilka objekt som syns. "Tänd" visar sedan bara de objekten, i grönt, utan att byta vy.</div>
+<button id="btnViews">Hämta vyer</button>
+<div id="views"></div>
+
+<h2>4. Hastighet</h2>
+<button id="btnSpeed">Tänd synliga objekt i 10 steg</button>
+
+<h2>Logg <button id="btnCopy" style="float:right;margin:-4px 0 0">Kopiera</button></h2>
+<div id="log"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const GREEN = { r: 46, g: 158, b: 79, a: 255 };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+let API = null;
+const captured = new Map();     // vy-id -> [{ modelId, objectRuntimeIds }]
+
+function log(...parts) {
+  const text = parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p, null, 1))).join(' ');
+  $('log').textContent += `[${new Date().toLocaleTimeString('sv')}] ${text.length > 1500 ? text.slice(0, 1500) + ' …' : text}\n`;
+  $('log').scrollTop = $('log').scrollHeight;
+}
+// Kör ett steg, mät tiden och skriv fel i loggen i stället för att tappa dem
+async function step(name, fn) {
+  const t0 = performance.now();
+  try {
+    const r = await fn();
+    log(`${name}: ok (${Math.round(performance.now() - t0)} ms)`);
+    return r;
+  } catch (e) {
+    log(`${name}: FEL – ${e && e.message ? e.message : JSON.stringify(e)}`);
+    throw e;
+  }
+}
+const toIds = modelObjects => modelObjects
+  .map(m => ({ modelId: m.modelId, objectRuntimeIds: (m.objects || []).map(o => o.id) }))
+  .filter(m => m.objectRuntimeIds.length);
+const count = ids => ids.reduce((n, m) => n + m.objectRuntimeIds.length, 0);
+const visibleObjects = async () => toIds(await API.viewer.getObjects(undefined, { visible: true }));
+
+async function connect() {
+  if (window.parent === window) {
+    $('status').textContent = 'Den här sidan ska öppnas som tillägg inne i Trimble Connect, inte direkt i webbläsaren.';
+    return;
+  }
+  try {
+    API = await TrimbleConnectWorkspace.connect(window.parent, (event, args) => log('händelse:', event), 30000);
+    const project = await API.project.getProject();
+    $('status').textContent = 'Ansluten till projekt: ' + (project && project.name);
+    log('ansluten', { projekt: project && project.name });
+  } catch (e) {
+    $('status').textContent = 'Kunde inte ansluta till Trimble Connect.';
+    log('anslutning: FEL –', e && e.message ? e.message : e);
+  }
+}
+
+$('btnModels').onclick = async () => {
+  const all = await step('getObjects (alla)', () => API.viewer.getObjects());
+  for (const m of all) log(`  modell ${m.modelId}: ${(m.objects || []).length} objekt`);
+  if (all[0] && all[0].objects && all[0].objects[0]) log('  exempelobjekt:', all[0].objects[0]);
+  const vis = await step('getObjects (synliga)', visibleObjects);
+  log(`  synliga just nu: ${count(vis)}`);
+};
+
+$('btnHide').onclick  = () => step('dölj allt', () => API.viewer.setObjectState(undefined, { visible: false }));
+$('btnShow').onclick  = () => step('visa allt', () => API.viewer.setObjectState(undefined, { visible: true }));
+$('btnGreen').onclick = () => step('färga markerade', () => API.viewer.setObjectState({ selected: true }, { color: GREEN }));
+$('btnReset').onclick = () => step('återställ', () => API.viewer.setObjectState(undefined, { visible: 'reset', color: 'reset' }));
+
+$('btnViews').onclick = async () => {
+  const views = await step('getViews', () => API.view.getViews());
+  log(`  ${views.length} vyer`);
+  $('views').replaceChildren();
+  for (const v of views) {
+    const row = Object.assign(document.createElement('div'), { className: 'view' });
+    const name = Object.assign(document.createElement('span'), { textContent: v.name || v.id });
+    const light = Object.assign(document.createElement('button'), { textContent: 'Tänd', disabled: true });
+    const read = Object.assign(document.createElement('button'), { textContent: 'Läs in' });
+    read.onclick = async () => {
+      await step(`selectView "${v.name}"`, () => API.view.selectView(v.id));
+      await wait(2000);                               // ge vyn tid att slå igenom innan vi frågar vad som syns
+      const ids = await step('getObjects (synliga i vyn)', visibleObjects);
+      captured.set(v.id, ids);
+      name.textContent = `${v.name} (${count(ids)} objekt)`;
+      light.disabled = !count(ids);
+      log(`  "${v.name}": ${count(ids)} objekt i ${ids.length} modell(er)`);
+    };
+    light.onclick = async () => {
+      await step('dölj allt', () => API.viewer.setObjectState(undefined, { visible: false }));
+      await step(`tänd "${v.name}"`, () => API.viewer.setObjectState({ modelObjectIds: captured.get(v.id) }, { visible: true, color: GREEN }));
+    };
+    row.append(name, read, light);
+    $('views').append(row);
+  }
+};
+
+$('btnSpeed').onclick = async () => {
+  const ids = await step('getObjects (synliga)', visibleObjects);
+  const total = count(ids);
+  if (!total) return log('  inga synliga objekt att testa med');
+  const flat = ids.flatMap(m => m.objectRuntimeIds.map(id => [m.modelId, id]));
+  const size = Math.ceil(flat.length / 10), times = [];
+  await step('dölj allt', () => API.viewer.setObjectState(undefined, { visible: false }));
+  for (let i = 0; i < flat.length; i += size) {
+    const byModel = new Map();
+    for (const [modelId, id] of flat.slice(i, i + size)) {
+      if (!byModel.has(modelId)) byModel.set(modelId, []);
+      byModel.get(modelId).push(id);
+    }
+    const sel = { modelObjectIds: [...byModel].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds })) };
+    const t0 = performance.now();
+    await API.viewer.setObjectState(sel, { visible: true });
+    times.push(Math.round(performance.now() - t0));
+    await wait(150);
+  }
+  log(`hastighet: ${total} objekt i ${times.length} steg, ms per steg: ${times.join(', ')}`);
+};
+
+$('btnCopy').onclick = () => navigator.clipboard.writeText($('log').textContent).then(
+  () => { $('btnCopy').textContent = 'Kopierad'; setTimeout(() => { $('btnCopy').textContent = 'Kopiera'; }, 1500); },
+  () => log('kunde inte kopiera – markera texten och kopiera för hand'));
+
+connect();
+</script>
+</body>
+</html>
