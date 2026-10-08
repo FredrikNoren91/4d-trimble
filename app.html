@@ -791,7 +791,7 @@ function writeEdits(edits) { try { localStorage.setItem(editsKey(), JSON.stringi
 function showEdits() {
   const n = tasks.filter(t => t.edited).length;
   $('editsInfo').hidden = !tasks.length;
-  $('editsCount').textContent = n ? `${n} värde${n > 1 ? 'n' : ''} ändrat i tillägget (sparas automatiskt)` : 'Ändringar i värdefälten sparas automatiskt.';
+  $('editsCount').textContent = n ? `${n > 1 ? n + ' värden ändrade' : '1 värde ändrat'} i tillägget (sparas automatiskt)` : 'Ändringar i värdefälten sparas automatiskt.';
   $('btnUndoEdits').hidden = !n;
 }
 $('btnUndoEdits').onclick = () => {
