@@ -1,6 +1,6 @@
 {
   "title": "4D-test",
-  "description": "Minimalt test: styr synlighet och färg i 3D-vyn utifrån vyer.",
+  "description": "4D: kopplar tidplanen till modellerna och styr synlighet och färg i 3D-vyn över tid. Utvecklad av Fredrik Norén, Swedish Concrete.",
   "url": "https://fredriknoren91.github.io/4d-trimble/index.html",
   "icon": "https://fredriknoren91.github.io/4d-trimble/icon.svg",
   "infoUrl": "https://fredriknoren91.github.io/4d-trimble/index.html",

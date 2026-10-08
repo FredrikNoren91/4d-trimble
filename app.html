@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 7</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 8</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -91,8 +91,10 @@
   <div id="log"></div>
 </details>
 
+<div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
+
 <script>
-const VERSION = 7;
+const VERSION = 8;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
