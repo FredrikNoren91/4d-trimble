@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 12</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 13</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -91,6 +91,8 @@
   <div id="views"></div>
   <h2>Hastighet</h2>
   <button id="btnSpeed">Tänd synliga objekt i 10 steg</button>
+  <h2>Styrning av 3D-vyn</h2>
+  <button id="btnSelfTest">Prova ut styrsätt igen</button>
   <h2>Logg <button id="btnCopy" style="float:right;margin:-4px 0 0">Kopiera</button></h2>
   <div id="log"></div>
 </details>
@@ -98,7 +100,7 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 12;
+const VERSION = 13;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -480,6 +482,7 @@ async function link() {
     setStatus('Läser in objekten i de laddade modellerna…');
     const all = await step('getObjects (alla)', () => API.viewer.getObjects());
     for (const mo of all) log(`  objekt i modell ${mo.modelId}: ${(mo.objects || []).length}`);
+    lastAll = toIds(all);
 
     // Modeller och metadata först: de kräver inget vybyte
     for (const v of need.filter(v => v.kind === 'modell'))
@@ -499,12 +502,23 @@ async function link() {
     setStatus(!linked.length ? 'Ingen aktivitet fick träff i metadata, modellnamn eller vyer.' + metaHint
       : `${linked.length} av ${tasks.length} aktiviteter kopplade, ${[...captured.values()].reduce((n, ids) => n + count(ids), 0)} objekt.` +
         (missing.length ? ` Utan träff: ${missing.map(t => t.name).join(', ').slice(0, 200)}.` : ''));
+    logOverlap();
+    if (linked.length && !strategy) { linking = false; await selfTest(); }     // engångstest: hitta det sätt som ger bild
   } catch (e) {
     log('koppling: FEL –', errText(e));
     setStatus('Kunde inte läsa in kopplingarna: ' + errText(e));
   } finally { linking = false; linkedAt = Date.now(); $('btnLink').disabled = false; }
 }
 $('btnLink').onclick = link;
+
+// Samma objekt i flera aktiviteter är tillåtet men värt att veta om: de tänds redan vid den första
+function logOverlap() {
+  const owners = new Map();
+  for (const t of tasks) for (const id of t.viewIds) for (const m of captured.get(id) || [])
+    for (const o of m.objectRuntimeIds) { const k = m.modelId + ':' + o; owners.set(k, (owners.get(k) || 0) + 1); }
+  const shared = [...owners.values()].filter(n => n > 1).length;
+  if (shared) log(`  obs: ${shared} av ${owners.size} kopplade objekt hör till mer än en aktivitet och tänds vid den första av dem`);
+}
 try { const p = localStorage.getItem('4d.prop'); if (p !== null) $('prop').value = p; } catch {}
 $('prop').addEventListener('change', () => {
   try { localStorage.setItem('4d.prop', $('prop').value.trim()); } catch {}
@@ -514,7 +528,7 @@ $('prop').addEventListener('change', () => {
 // När modeller laddas in eller ur i 3D-vyn görs kopplingen om av sig själv (inte medan vi själva bläddrar vyer)
 let relinkTimer = null;
 function onViewerEvent(event) {
-  if (event !== 'viewer.onModelStateChanged' || linking || Date.now() - linkedAt < 4000 || !tasks.length) return;
+  if (event !== 'viewer.onModelStateChanged' || linking || testing || Date.now() - linkedAt < 4000 || !tasks.length) return;
   clearTimeout(relinkTimer);
   relinkTimer = setTimeout(link, 2000);
 }
@@ -532,8 +546,120 @@ function isoWeek(d) {
 }
 // Status för en aktivitet vid tiden t: 0 = ej påbörjad, 1 = pågår, 2 = klar
 const taskState = (task, t) => (t < task.start ? 0 : t < task.finish ? 1 : 2);
-// Hur en vy ska se ut i 3D för en given status. Utgångspunkt för egna regler.
-const lookFor = state => (state === 0 ? { visible: false } : state === 1 ? { visible: true, color: GREEN } : { visible: true, color: 'reset' });
+
+/* ---- Objektmängder: modell -> mängd av objekt-id ---- */
+function unionOf(lists) {
+  const out = new Map();
+  for (const ids of lists) for (const m of ids || []) {
+    let s = out.get(m.modelId); if (!s) out.set(m.modelId, s = new Set());
+    for (const id of m.objectRuntimeIds) s.add(id);
+  }
+  return out;
+}
+function minus(a, b) {
+  const out = new Map();
+  for (const [modelId, s] of a) {
+    const other = b && b.get(modelId), rest = other ? [...s].filter(id => !other.has(id)) : [...s];
+    if (rest.length) out.set(modelId, new Set(rest));
+  }
+  return out;
+}
+const toSel = map => [...map].map(([modelId, s]) => ({ modelId, objectRuntimeIds: [...s] })).filter(m => m.objectRuntimeIds.length);
+const size = map => [...map.values()].reduce((n, s) => n + s.size, 0);
+
+/* ---- Sätt att få Trimble att visa enbart ett urval. Självtestet väljer det som faktiskt ger bild. ---- */
+let lastAll = [];                 // alla objekt i laddade modeller, från senaste kopplingen
+const hideAll = () => API.viewer.setObjectState(undefined, { visible: false });
+const resetVis = () => API.viewer.setObjectState(undefined, { visible: 'reset' });
+const setVis = (sel, visible) => (sel.length ? API.viewer.setObjectState({ modelObjectIds: sel }, { visible }) : null);
+const isolate = sel => API.viewer.isolateEntities(sel.map(m => ({ modelId: m.modelId, entityIds: m.objectRuntimeIds })));
+const STRATEGIES = {
+  A:  { text: 'dölj allt, tänd urvalet',            show: async sel => { await hideAll(); await setVis(sel, true); } },
+  B:  { text: 'isolateEntities',                    show: sel => isolate(sel) },
+  B2: { text: 'återställ, sedan isolateEntities',   show: async sel => { await resetVis(); await isolate(sel); } },
+  C:  { text: 'återställ, dölj allt utom urvalet',  show: async sel => { await resetVis(); await setVis(toSel(minus(unionOf([lastAll]), unionOf([sel]))), false); } },
+  D:  { text: 'dölj allt, tänd urvalet rekursivt',  show: async sel => { await hideAll(); await API.viewer.setObjectState({ modelObjectIds: sel.map(m => ({ ...m, recursive: true })) }, { visible: true }); } },
+};
+let strategy = null;
+try { const s = localStorage.getItem('4d.strategy'); if (s && STRATEGIES[s]) strategy = s; } catch {}
+
+// Bild av 3D-vyn, nedskalad, för att kunna mäta om något faktiskt ritas
+async function snap() {
+  try {
+    let url = await API.viewer.getSnapshot();
+    if (!/^data:/.test(url)) url = 'data:image/png;base64,' + url;
+    return await new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = 160; c.height = Math.max(1, Math.round(160 * img.height / img.width));
+        const g = c.getContext('2d');
+        g.drawImage(img, 0, 0, c.width, c.height);
+        res(g.getImageData(0, 0, c.width, c.height));
+      };
+      img.onerror = () => rej(new Error('bilden gick inte att läsa'));
+      img.src = url;
+    });
+  } catch (e) { log(`  getSnapshot: FEL – ${errText(e)}`); return null; }
+}
+// Andel bildpunkter som skiljer sig mellan två bilder
+function diff(a, b) {
+  if (!a || !b || a.width !== b.width || a.height !== b.height) return null;
+  let n = 0;
+  for (let i = 0; i < a.data.length; i += 4)
+    if (Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i + 1] - b.data[i + 1]) + Math.abs(a.data[i + 2] - b.data[i + 2]) > 40) n++;
+  return n / (a.data.length / 4);
+}
+
+// Provar varje sätt på de kopplade objekten och mäter resultatet, dels med Trimbles egen räkning av synliga objekt,
+// dels genom att jämföra en bild av 3D-vyn med en bild där allt är släckt.
+let testing = false;
+async function selfTest() {
+  const all = unionOf([...captured.values()]), sel = toSel(all);
+  if (!API || !sel.length || testing) return;
+  testing = true;
+  setStatus('Provar ut hur 3D-vyn ska styras – vyn blinkar i ungefär 15 sekunder…');
+  log(`självtest på ${size(all)} kopplade objekt`);
+  let cam = null, fitted = false;
+  try { cam = await API.viewer.getCamera(); } catch {}
+  const results = [];
+  try {
+    for (const [key, st] of Object.entries(STRATEGIES)) {
+      try {
+        await hideAll();                                   // utgångsläget under uppspelning: allt släckt
+        await st.show(sel);
+        if (!fitted) { fitted = true; try { await API.viewer.setCamera({ modelObjectIds: sel }); } catch (e) { log(`  setCamera: FEL – ${errText(e)}`); } }
+        await wait(900);
+        results.push({ key, vis: count(await visibleObjects()), shot: await snap() });
+      } catch (e) { log(`  ${key} (${st.text}): FEL – ${errText(e)}`); }
+    }
+    await hideAll(); await wait(900);
+    const empty = await snap(), emptyVis = count(await visibleObjects());
+    log(`  allt släckt: Trimble räknar ${emptyVis} synliga`);
+    for (const r of results) {
+      r.cover = diff(r.shot, empty);
+      log(`  ${r.key} (${STRATEGIES[r.key].text}): Trimble räknar ${r.vis} synliga, bildskillnad ${r.cover == null ? 'okänd' : (100 * r.cover).toFixed(2) + ' %'}`);
+    }
+    const best = Math.max(0, ...results.map(r => r.cover || 0));
+    let pick = best > 0.002 ? results.find(r => r.cover >= 0.6 * best) : null;
+    if (!pick && !results.some(r => r.cover != null))           // inga bilder: lita på Trimbles räkning
+      pick = results.find(r => r.vis > 0.5 * size(all) && r.vis < 1.5 * size(all));
+    if (pick) {
+      strategy = pick.key;
+      try { localStorage.setItem('4d.strategy', strategy); } catch {}
+      log(`  valt sätt: ${pick.key} (${STRATEGIES[pick.key].text})`);
+      setStatus(`3D-styrningen fungerar (sätt ${pick.key}).`);
+    } else {
+      log('  inget sätt gav synliga objekt');
+      setStatus('Inget av sätten att styra 3D-vyn gav synliga objekt – skicka loggen.');
+    }
+  } finally {
+    if (cam) try { await API.viewer.setCamera(cam); } catch {}
+    testing = false;
+    applied = null;
+    await applyTime();
+  }
+}
 
 let busy = false, again = false;
 async function applyTime() {
@@ -541,7 +667,7 @@ async function applyTime() {
   if (!t) return;
   $('date').value = fmt(t); $('week').textContent = 'v. ' + isoWeek(t);
   for (const task of tasks) { task.state = taskState(task, t); if (task.dot) task.dot.className = 'dot s' + task.state; }
-  if (!API || !captured.size) return;
+  if (!API || !captured.size || testing) return;
   if (busy) { again = true; return; }       // reglaget dras snabbare än 3D-vyn hinner: kör bara senaste läget
   busy = true;
   try { do { again = false; await pushStates(); } while (again); }
@@ -553,24 +679,44 @@ async function applyTime() {
   finally { busy = false; }
 }
 
-// Skickar bara de vyer vars status ändrats sedan sist
+// Räknar ut per objekt vad som ska synas och skickar bara skillnaden mot förra läget.
+// Ett objekt som hör till flera aktiviteter syns så snart någon av dem har börjat, och är grönt så länge någon pågår.
 async function pushStates() {
-  const want = new Map();
-  for (const task of tasks) for (const id of task.viewIds) {
+  const startedSets = [], activeSets = [];
+  for (const task of tasks) if (task.state > 0) for (const id of task.viewIds) {
     if (!captured.has(id)) continue;
-    const p = want.get(id), s = task.state;
-    want.set(id, p === undefined ? s : (p === 1 || s === 1) ? 1 : Math.max(p, s));
+    startedSets.push(captured.get(id));
+    if (task.state === 1) activeSets.push(captured.get(id));
   }
-  if (!applied) {
-    if (!$('showUnlinked').checked) await API.viewer.setObjectState(undefined, { visible: false });
-    applied = new Map();
+  const started = unionOf(startedSets), active = unionOf(activeSets);
+  const first = !applied, prev = applied || { started: new Map(), active: new Map() };
+  const toShow = minus(started, prev.started), toHide = minus(prev.started, started);
+  if (!first && !size(toShow) && !size(toHide) && !size(minus(active, prev.active)) && !size(minus(prev.active, active))) return;
+
+  // Synlighet
+  if ($('showUnlinked').checked) {
+    if (first) { await resetVis(); await setVis(toSel(minus(unionOf([...captured.values()]), started)), false); }
+    await setVis(toSel(toHide), false);
+    await setVis(toSel(toShow), true);
+  } else if (!size(started)) {
+    if (first || size(toHide)) await hideAll();
+  } else if ((strategy || 'A') === 'A') {
+    if (first) await hideAll();
+    await setVis(toSel(toHide), false);
+    await setVis(toSel(toShow), true);
+  } else if (first || size(toShow) || size(toHide)) {
+    await STRATEGIES[strategy].show(toSel(started));
   }
-  for (const [id, s] of want) {
-    if (applied.get(id) === s) continue;
-    await API.viewer.setObjectState({ modelObjectIds: captured.get(id) }, lookFor(s));
-    applied.set(id, s);
-  }
+
+  // Färg: pågående grönt, övrigt i modellens egen färg
+  if (first) await API.viewer.setObjectState(undefined, { color: 'reset' });
+  const toReset = toSel(minus(prev.active, active)), toGreen = toSel(first ? active : minus(active, prev.active));
+  if (toReset.length) await API.viewer.setObjectState({ modelObjectIds: toReset }, { color: 'reset' });
+  if (toGreen.length) await API.viewer.setObjectState({ modelObjectIds: toGreen }, { color: GREEN });
+  applied = { started, active };
+  lastShown = size(started);
 }
+let lastShown = 0;
 
 async function resetViewer() {
   applied = null;
@@ -711,6 +857,7 @@ $('btnViews').onclick = async () => {
   }
 };
 
+$('btnSelfTest').onclick = () => (captured.size ? selfTest() : setStatus('Läs in en tidplan och koppla den först.'));
 $('btnSpeed').onclick = async () => {
   const ids = await step('getObjects (synliga)', visibleObjects);
   const total = count(ids);
