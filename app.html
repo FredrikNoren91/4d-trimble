@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 11</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 12</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -98,7 +98,7 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 11;
+const VERSION = 12;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -118,8 +118,14 @@ let day0 = null;
 /* ============================================================
    Logg
    ============================================================ */
+// Trimbles metadata kan innehålla BigInt-tal, som JSON inte klarar utan hjälp
+function toText(p) {
+  if (typeof p === 'string') return p;
+  try { return JSON.stringify(p, (k, v) => (typeof v === 'bigint' ? v.toString() : v), 1); }
+  catch { return String(p); }
+}
 function log(...parts) {
-  const text = parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p, null, 1))).join(' ');
+  const text = parts.map(toText).join(' ');
   $('log').textContent += `[${new Date().toLocaleTimeString('sv')}] ${text.length > 5000 ? text.slice(0, 5000) + ' …' : text}\n`;
   $('log').scrollTop = $('log').scrollHeight;
 }
@@ -302,7 +308,7 @@ function nameMatcher(text) {
 const allValues = t => t.filter.split(/[;|]/).map(s => s.trim()).filter(Boolean);
 const filterValues = t => allValues(t).filter(v => !/^vy\s*=/i.test(v));
 const viewValues = t => allValues(t).filter(v => /^vy\s*=/i.test(v)).map(v => v.replace(/^vy\s*=/i, '').trim());
-const errText = e => (e && e.message) || (typeof e === 'string' ? e : JSON.stringify(e));
+const errText = e => (e && e.message) || toText(e);
 let linkedOnce = false;
 
 function matchViews() {
@@ -350,8 +356,8 @@ async function fetchProps(modelId, ids) {
   for (const src of propSource ? [propSource] : propSources) {
     try {
       const r = await src.get(modelId, ids);
-      if (!Array.isArray(r) || !r.length) throw new Error('tomt svar: ' + String(JSON.stringify(r)).slice(0, 200));
-      if (!r.some(o => o && (o.properties || o.product))) throw new Error('svar utan egenskaper: ' + JSON.stringify(r[0]).slice(0, 200));
+      if (!Array.isArray(r) || !r.length) throw new Error('tomt svar: ' + String(toText(r)).slice(0, 200));
+      if (!r.some(o => o && (o.properties || o.product))) throw new Error('svar utan egenskaper: ' + toText(r[0]).slice(0, 200));
       if (!propSource) { propSource = src; log(`  metadata hämtas med ${src.name}`); }
       return r;
     } catch (e) { lastErr = e; log(`  ${src.name} (${ids.length} objekt): FEL – ${errText(e)}`); }
