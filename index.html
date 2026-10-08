@@ -3,55 +3,104 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>4D-test</title>
+<title>4D</title>
 <style>
+  :root { --line:#d9dde3; --muted:#6b7480; --active:#2e9e4f; }
   * { box-sizing: border-box; }
   body { font: 13px/1.4 "Segoe UI", system-ui, sans-serif; color: #1c2430; margin: 0; padding: 10px; background: #fff; }
   h1 { font-size: 15px; margin: 0 0 2px; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #6b7480; margin: 14px 0 6px; }
-  button { font: inherit; padding: 4px 9px; border: 1px solid #b9c0ca; background: #fff; border-radius: 4px; cursor: pointer; margin: 0 4px 4px 0; }
-  button:hover { background: #eef1f5; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
+  button, .btn { font: inherit; padding: 4px 9px; border: 1px solid #b9c0ca; background: #fff; border-radius: 4px; cursor: pointer; margin: 0 4px 4px 0; display: inline-block; }
+  button:hover, .btn:hover { background: #eef1f5; }
   button:disabled { opacity: .5; cursor: default; }
-  .muted { color: #6b7480; }
+  input[type=file] { display: none; }
+  input[type=text], input[type=date], select { font: inherit; padding: 3px 6px; border: 1px solid #b9c0ca; border-radius: 4px; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  label.chk { display: flex; gap: 5px; align-items: center; }
+  table { border-collapse: collapse; width: 100%; }
+  #tasks td { padding: 3px 4px; border-bottom: 1px solid #eef0f3; vertical-align: top; }
+  #tasks .name { overflow-wrap: anywhere; }
+  #tasks .sub { color: var(--muted); font-size: 11px; }
+  #tasks input { width: 80px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #9aa3ae; background: #fff; margin-top: 4px; }
+  .dot.s1 { background: var(--active); border-color: var(--active); }
+  .dot.s2 { background: #5b6675; border-color: #5b6675; }
+  #slider { width: 100%; }
   .view { display: flex; gap: 6px; align-items: center; padding: 3px 0; border-bottom: 1px solid #eef0f3; }
   .view span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .view button { margin: 0; }
-  #log { white-space: pre-wrap; font: 11px/1.35 Consolas, monospace; background: #f4f5f7; border: 1px solid #d9dde3; border-radius: 4px;
+  details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
+  summary { cursor: pointer; color: var(--muted); }
+  #log { white-space: pre-wrap; font: 11px/1.35 Consolas, monospace; background: #f4f5f7; border: 1px solid var(--line); border-radius: 4px;
          padding: 6px; max-height: 260px; overflow: auto; }
 </style>
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D-test</h1>
+<h1>4D</h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
-<h2>1. Modeller</h2>
-<button id="btnModels">Räkna objekt i laddade modeller</button>
+<h2>Tidplan</h2>
+<div class="row">
+  <label class="btn">Öppna tidplan…<input id="schedFile" type="file" accept=".xml,.csv,.txt"></label>
+  <button id="btnLink" disabled title="Hämtar projektets vyer och läser in objekten i de vyer som är kopplade till en aktivitet">Läs in kopplade vyer</button>
+</div>
+<div class="muted">Varje aktivitet kopplas till en vy via namnet, t.ex. <code>W43</code> → vyn WEEK 43. Flera vyer: <code>W43|W44</code>.</div>
+<table id="tasks"></table>
 
-<h2>2. Tända, släcka, färga</h2>
-<button id="btnHide">Dölj allt</button>
-<button id="btnShow">Visa allt</button>
-<button id="btnGreen">Färga markerade gröna</button>
-<button id="btnReset">Återställ</button>
+<h2>Tid</h2>
+<div class="row">
+  <button id="play" title="Spela upp">▶</button>
+  <select id="step" title="Steg vid uppspelning"><option value="1">dag</option><option value="7" selected>vecka</option></select>
+  <input id="date" type="date" disabled>
+  <span id="week" class="muted"></span>
+</div>
+<input id="slider" type="range" min="0" max="0" value="0" disabled>
+<div class="row" style="justify-content:space-between"><span id="minLbl" class="muted"></span><span id="maxLbl" class="muted"></span></div>
+<div class="row">
+  <label class="chk"><input id="showUnlinked" type="checkbox"> Visa okopplade objekt</label>
+  <button id="btnReset" style="margin:0 0 0 auto">Återställ 3D-vyn</button>
+</div>
 
-<h2>3. Vyer</h2>
-<div class="muted">"Läs in" slår på vyn och sparar vilka objekt som syns. "Tänd" visar sedan bara de objekten, i grönt, utan att byta vy.</div>
-<button id="btnViews">Hämta vyer</button>
-<div id="views"></div>
-
-<h2>4. Hastighet</h2>
-<button id="btnSpeed">Tänd synliga objekt i 10 steg</button>
-
-<h2>Logg <button id="btnCopy" style="float:right;margin:-4px 0 0">Kopiera</button></h2>
-<div id="log"></div>
+<details>
+  <summary>Test och logg</summary>
+  <h2>Modeller</h2>
+  <button id="btnModels">Räkna objekt i laddade modeller</button>
+  <h2>Tända, släcka, färga</h2>
+  <button id="btnHide">Dölj allt</button>
+  <button id="btnShow">Visa allt</button>
+  <button id="btnGreen">Färga markerade gröna</button>
+  <h2>Vyer</h2>
+  <div class="muted">"Läs in" slår på vyn och sparar vilka objekt som syns. "Tänd" visar sedan bara de objekten, i grönt.</div>
+  <button id="btnViews">Hämta vyer</button>
+  <div id="views"></div>
+  <h2>Hastighet</h2>
+  <button id="btnSpeed">Tänd synliga objekt i 10 steg</button>
+  <h2>Logg <button id="btnCopy" style="float:right;margin:-4px 0 0">Kopiera</button></h2>
+  <div id="log"></div>
+</details>
 
 <script>
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
-let API = null;
-const captured = new Map();     // vy-id -> [{ modelId, objectRuntimeIds }]
+const setStatus = s => { $('status').textContent = s; };
 
+/* ============================================================
+   Tillstånd
+   ============================================================ */
+let API = null;
+let tasks = [];                 // { id, name, start, finish, filter, viewIds:[], state, dot, sub }
+let schedName = '';
+let views = [];                 // projektets vyer från Trimble Connect: { id, name }
+const captured = new Map();     // vy-id -> [{ modelId, objectRuntimeIds }]
+let applied = null;             // vy-id -> senast skickad status; null = 3D-vyn är orörd
+let day0 = null;
+
+/* ============================================================
+   Logg
+   ============================================================ */
 function log(...parts) {
   const text = parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p, null, 1))).join(' ');
   $('log').textContent += `[${new Date().toLocaleTimeString('sv')}] ${text.length > 1500 ? text.slice(0, 1500) + ' …' : text}\n`;
@@ -69,60 +118,342 @@ async function step(name, fn) {
     throw e;
   }
 }
+
+/* ============================================================
+   Trimble Connect
+   ============================================================ */
 const toIds = modelObjects => modelObjects
   .map(m => ({ modelId: m.modelId, objectRuntimeIds: (m.objects || []).map(o => o.id) }))
   .filter(m => m.objectRuntimeIds.length);
-const count = ids => ids.reduce((n, m) => n + m.objectRuntimeIds.length, 0);
+const count = ids => (ids || []).reduce((n, m) => n + m.objectRuntimeIds.length, 0);
 const visibleObjects = async () => toIds(await API.viewer.getObjects(undefined, { visible: true }));
 
 async function connect() {
-  if (window.parent === window) {
-    $('status').textContent = 'Den här sidan ska öppnas som tillägg inne i Trimble Connect, inte direkt i webbläsaren.';
-    return;
-  }
+  if (window.parent === window) return setStatus('Den här sidan ska öppnas som tillägg inne i Trimble Connect, inte direkt i webbläsaren.');
   try {
     API = await TrimbleConnectWorkspace.connect(window.parent, (event, args) => log('händelse:', event), 30000);
     const project = await API.project.getProject();
-    $('status').textContent = 'Ansluten till projekt: ' + (project && project.name);
+    setStatus('Ansluten till projekt: ' + (project && project.name));
     log('ansluten', { projekt: project && project.name });
+    $('btnLink').disabled = !tasks.length;
   } catch (e) {
-    $('status').textContent = 'Kunde inte ansluta till Trimble Connect.';
+    setStatus('Kunde inte ansluta till Trimble Connect.');
     log('anslutning: FEL –', e && e.message ? e.message : e);
   }
 }
 
+// Slår på en vy och sparar vilka objekt som syns i den
+async function captureView(v) {
+  await step(`selectView "${v.name}"`, () => API.view.selectView(v.id));
+  await wait(2000);                                 // ge vyn tid att slå igenom innan vi frågar vad som syns
+  const ids = await step('getObjects (synliga i vyn)', visibleObjects);
+  captured.set(v.id, ids);
+  log(`  "${v.name}": ${count(ids)} objekt i ${ids.length} modell(er)`);
+  return ids;
+}
+
+/* ============================================================
+   Tidplan (Asta Powerproject: export till MS Project XML eller CSV)
+   ============================================================ */
+function parseDate(s) {
+  s = String(s || '').trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/);
+  if (m) return { d: new Date(+m[1], m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)), time: m[4] != null };
+  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (m) return { d: new Date(m[3].length === 2 ? 2000 + +m[3] : +m[3], m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)), time: m[4] != null };
+  return null;
+}
+// Slutdatum utan klockslag räknas till och med hela den dagen.
+function span(startStr, finishStr) {
+  const a = parseDate(startStr), b = parseDate(finishStr) || a;
+  if (!a) return null;
+  const fin = new Date(b.d);
+  if (!b.time) fin.setDate(fin.getDate() + 1);
+  return { start: a.d, finish: fin };
+}
+const RE_4D = /^(4d|filter|4d-filter|4d-kod|vy)$/i;
+
+function parseMspXml(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const kids = (n, tag) => [...n.children].filter(c => c.localName === tag);
+  const txt = (n, tag) => kids(n, tag)[0]?.textContent.trim() ?? '';
+  const proj = doc.documentElement;
+  let fieldId4d = null;
+  for (const defs of kids(proj, 'ExtendedAttributes'))
+    for (const a of kids(defs, 'ExtendedAttribute'))
+      if (RE_4D.test(txt(a, 'Alias')) || RE_4D.test(txt(a, 'FieldName'))) fieldId4d = txt(a, 'FieldID');
+  const out = [];
+  for (const ts of kids(proj, 'Tasks')) for (const t of kids(ts, 'Task')) {
+    const sp = span(txt(t, 'Start'), txt(t, 'Finish')), name = txt(t, 'Name');
+    if (!sp || !name) continue;
+    let def = '';
+    for (const a of kids(t, 'ExtendedAttribute')) if (fieldId4d && txt(a, 'FieldID') === fieldId4d) def = txt(a, 'Value');
+    out.push({ id: txt(t, 'UID') || txt(t, 'ID') || name, name, ...sp, defFilter: def });
+  }
+  return out;
+}
+
+function parseCsv(text) {
+  const first = text.split(/\r?\n/, 1)[0];
+  const delim = [';', '\t', ','].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === delim) { row.push(cell); cell = ''; }
+    else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (ch !== '\r') cell += ch;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+
+  const head = rows.shift().map(h => h.trim());
+  const col = re => head.findIndex(h => re.test(h));
+  const cName = col(/^(namn|name|aktivitet|aktivitetsnamn|benämning|beskrivning|task name)$/i);
+  const cStart = col(/^(start|startdatum|starttid|tidig start|early start)$/i);
+  const cFin = col(/^(slut|slutdatum|sluttid|färdig|finish|end|tidigt slut|early finish)$/i);
+  const cId = col(/^(id|uid|unikt id|unique id|aktivitets-id|aktivitetsid)$/i);
+  const c4d = col(RE_4D);
+  if (cName < 0 || cStart < 0)
+    throw new Error(`Hittar inte kolumnerna Namn och Start. Kolumner i filen: ${head.join(', ')}`);
+  const out = [];
+  for (const r of rows) {
+    const sp = span(r[cStart], cFin >= 0 ? r[cFin] : ''), name = (r[cName] || '').trim();
+    if (!sp || !name) continue;
+    out.push({ id: (cId >= 0 && (r[cId] || '').trim()) || name, name, ...sp, defFilter: c4d >= 0 ? (r[c4d] || '').trim() : '' });
+  }
+  return out;
+}
+
+function decode(buf) {
+  const b = new Uint8Array(buf);
+  if (b[0] === 0xff && b[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf);
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+  catch { return new TextDecoder('windows-1252').decode(buf); }
+}
+
+function loadSchedule(name, text) {
+  const list = /^\s*(﻿)?\s*</.test(text) ? parseMspXml(text) : parseCsv(text.replace(/^﻿/, ''));
+  if (!list.length) throw new Error('Inga aktiviteter med start- och slutdatum hittades i filen.');
+  schedName = name;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('4d.links.' + name) || '{}'); } catch {}
+  tasks = list.map(t => ({ ...t, filter: saved[t.id] ?? t.defFilter, viewIds: [], state: 0 }));
+
+  // Tidslinjen går från dagens datum (eller första aktiviteten om den redan startat) till sista slutdatum, och börjar på idag.
+  const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const min = new Date(Math.min(today, ...tasks.map(t => t.start))), max = new Date(Math.max(today, ...tasks.map(t => t.finish)));
+  day0 = new Date(min.getFullYear(), min.getMonth(), min.getDate());
+  const days = Math.max(1, Math.ceil((max - day0 - 36e5) / 864e5));   // -1 h: tål övergång sommar-/vintertid
+  const s = $('slider');
+  s.max = days; s.value = Math.round((today - day0) / 864e5); s.disabled = false;
+  $('date').disabled = false;
+  $('date').min = fmt(day0); $('date').max = fmt(dayDate(days));
+  $('minLbl').textContent = fmt(day0); $('maxLbl').textContent = fmt(dayDate(days));
+
+  renderTasks();
+  matchViews();
+  $('btnLink').disabled = !API;
+  setStatus(`${tasks.length} aktiviteter från ${name}.` + (captured.size ? '' : ' Tryck "Läs in kopplade vyer".'));
+  applyTime();
+}
+
+/* ============================================================
+   Koppling aktivitet <-> vy (på namn)
+   ============================================================ */
+// Förkortningar tillåts: "W43" träffar "WEEK 43" men inte "WEEK 44" eller "WEEK 143".
+// Orden ska komma i samma ordning; bokstäver räcker som början på ett ord, tal måste stämma exakt.
+function nameMatcher(text) {
+  const tokens = s => s.toLowerCase().match(/[a-zåäö]+|\d+/g) || [];
+  const want = tokens(text);
+  return name => {
+    let i = 0;
+    for (const n of tokens(name))
+      if (i < want.length && (/\d/.test(want[i]) ? /\d/.test(n) && +n === +want[i] : n.startsWith(want[i]))) i++;
+    return want.length > 0 && i === want.length;
+  };
+}
+
+function matchViews() {
+  for (const t of tasks) {
+    const tests = t.filter.replace(/^vy\s*=/i, '').split('|').map(s => s.trim()).filter(Boolean).map(nameMatcher);
+    const hit = views.filter(v => tests.some(test => test(v.name || '')));
+    t.viewIds = hit.map(v => v.id);
+    if (t.sub) t.sub.textContent = !t.filter ? '' : !views.length ? 'vyer inte hämtade' : !hit.length ? 'ingen vy matchar'
+      : '→ ' + hit.map(v => v.name + (captured.has(v.id) ? ` (${count(captured.get(v.id))})` : '')).join(', ');
+  }
+}
+
+$('btnLink').onclick = async () => {
+  $('btnLink').disabled = true;
+  try {
+    views = await step('getViews', () => API.view.getViews());
+    log(`  ${views.length} vyer: ${views.map(v => v.name).join(', ')}`);
+    matchViews();
+    const need = views.filter(v => tasks.some(t => t.viewIds.includes(v.id)));
+    if (!need.length) return setStatus(`${views.length} vyer hämtade, men ingen matchar aktiviteterna.`);
+    let i = 0;
+    for (const v of need) {
+      setStatus(`Läser in vy ${++i} av ${need.length}: ${v.name}…`);
+      await captureView(v);
+      matchViews();
+    }
+    applied = null;
+    await applyTime();
+    setStatus(`${need.length} vyer inlästa, ${need.reduce((n, v) => n + count(captured.get(v.id)), 0)} objekt kopplade.`);
+  } catch (e) {
+    setStatus('Kunde inte läsa in vyerna – se loggen under "Test och logg".');
+  } finally { $('btnLink').disabled = false; }
+};
+
+/* ============================================================
+   Tid -> status -> synlighet/färg i Trimbles 3D-vy
+   ============================================================ */
+const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dayDate = i => new Date(day0.getFullYear(), day0.getMonth(), day0.getDate() + +i, 12);   // mitt på dagen
+const currentTime = () => (day0 ? dayDate($('slider').value) : null);
+function isoWeek(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  return Math.ceil(((t - Date.UTC(t.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7);
+}
+// Status för en aktivitet vid tiden t: 0 = ej påbörjad, 1 = pågår, 2 = klar
+const taskState = (task, t) => (t < task.start ? 0 : t < task.finish ? 1 : 2);
+// Hur en vy ska se ut i 3D för en given status. Utgångspunkt för egna regler.
+const lookFor = state => (state === 0 ? { visible: false } : state === 1 ? { visible: true, color: GREEN } : { visible: true, color: 'reset' });
+
+let busy = false, again = false;
+async function applyTime() {
+  const t = currentTime();
+  if (!t) return;
+  $('date').value = fmt(t); $('week').textContent = 'v. ' + isoWeek(t);
+  for (const task of tasks) { task.state = taskState(task, t); if (task.dot) task.dot.className = 'dot s' + task.state; }
+  if (!API || !captured.size) return;
+  if (busy) { again = true; return; }       // reglaget dras snabbare än 3D-vyn hinner: kör bara senaste läget
+  busy = true;
+  try { do { again = false; await pushStates(); } while (again); }
+  catch (e) { log('uppdatering av 3D-vyn: FEL –', e && e.message ? e.message : e); }
+  finally { busy = false; }
+}
+
+// Skickar bara de vyer vars status ändrats sedan sist
+async function pushStates() {
+  const want = new Map();
+  for (const task of tasks) for (const id of task.viewIds) {
+    if (!captured.has(id)) continue;
+    const p = want.get(id), s = task.state;
+    want.set(id, p === undefined ? s : (p === 1 || s === 1) ? 1 : Math.max(p, s));
+  }
+  if (!applied) {
+    if (!$('showUnlinked').checked) await API.viewer.setObjectState(undefined, { visible: false });
+    applied = new Map();
+  }
+  for (const [id, s] of want) {
+    if (applied.get(id) === s) continue;
+    await API.viewer.setObjectState({ modelObjectIds: captured.get(id) }, lookFor(s));
+    applied.set(id, s);
+  }
+}
+
+async function resetViewer() {
+  applied = null;
+  await step('återställ', () => API.viewer.setObjectState(undefined, { visible: 'reset', color: 'reset' }));
+}
+
+/* ============================================================
+   Gränssnitt
+   ============================================================ */
+function renderTasks() {
+  const tb = $('tasks');
+  tb.replaceChildren();
+  for (const t of tasks) {
+    const tr = tb.insertRow();
+    t.dot = Object.assign(document.createElement('span'), { className: 'dot' });
+    tr.insertCell().append(t.dot);
+    t.sub = Object.assign(document.createElement('div'), { className: 'sub' });
+    tr.insertCell().append(
+      Object.assign(document.createElement('div'), { className: 'name', textContent: t.name }),
+      Object.assign(document.createElement('div'), { className: 'sub', textContent: `${fmt(t.start)} – ${fmt(new Date(t.finish - 1))}` }),
+      t.sub);
+    const inp = Object.assign(document.createElement('input'), { type: 'text', value: t.filter, placeholder: 'vy' });
+    inp.addEventListener('change', () => {
+      t.filter = inp.value.trim();
+      try { localStorage.setItem('4d.links.' + schedName, JSON.stringify(Object.fromEntries(tasks.filter(x => x.filter).map(x => [x.id, x.filter])))); } catch {}
+      matchViews();
+      if (t.viewIds.some(id => !captured.has(id))) setStatus('Tryck "Läs in kopplade vyer" för att läsa in den nya kopplingen.');
+      applied = null;
+      applyTime();
+    });
+    tr.insertCell().append(inp);
+  }
+}
+
+$('schedFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try { loadSchedule(f.name, decode(await f.arrayBuffer())); }
+  catch (err) { log('tidplan: FEL –', err.message); setStatus(`Kunde inte läsa ${f.name}: ${err.message}`); }
+  e.target.value = '';
+});
+$('slider').addEventListener('input', applyTime);
+$('date').addEventListener('change', () => {
+  const p = parseDate($('date').value);
+  if (!p || !day0) return;
+  const s = $('slider');
+  s.value = Math.min(+s.max, Math.max(0, Math.round((p.d - day0) / 864e5)));
+  applyTime();
+});
+let timer = null;
+function stop() { clearInterval(timer); timer = null; $('play').textContent = '▶'; }
+$('play').addEventListener('click', () => {
+  if (timer) return stop();
+  const s = $('slider');
+  if (s.disabled) return;
+  if (+s.value >= +s.max) s.value = 0;
+  $('play').textContent = '⏸';
+  timer = setInterval(() => {
+    s.value = Math.min(+s.max, +s.value + +$('step').value);
+    applyTime();
+    if (+s.value >= +s.max) stop();
+  }, 500);
+});
+$('showUnlinked').addEventListener('change', async () => {
+  if (!API) return;
+  try { await resetViewer(); await applyTime(); } catch {}
+});
+$('btnReset').onclick = () => API && resetViewer().catch(() => {});
+
+/* ============================================================
+   Test och logg
+   ============================================================ */
 $('btnModels').onclick = async () => {
   const all = await step('getObjects (alla)', () => API.viewer.getObjects());
   for (const m of all) log(`  modell ${m.modelId}: ${(m.objects || []).length} objekt`);
   if (all[0] && all[0].objects && all[0].objects[0]) log('  exempelobjekt:', all[0].objects[0]);
-  const vis = await step('getObjects (synliga)', visibleObjects);
-  log(`  synliga just nu: ${count(vis)}`);
+  log(`  synliga just nu: ${count(await step('getObjects (synliga)', visibleObjects))}`);
 };
-
 $('btnHide').onclick  = () => step('dölj allt', () => API.viewer.setObjectState(undefined, { visible: false }));
 $('btnShow').onclick  = () => step('visa allt', () => API.viewer.setObjectState(undefined, { visible: true }));
 $('btnGreen').onclick = () => step('färga markerade', () => API.viewer.setObjectState({ selected: true }, { color: GREEN }));
-$('btnReset').onclick = () => step('återställ', () => API.viewer.setObjectState(undefined, { visible: 'reset', color: 'reset' }));
 
 $('btnViews').onclick = async () => {
-  const views = await step('getViews', () => API.view.getViews());
+  views = await step('getViews', () => API.view.getViews());
   log(`  ${views.length} vyer`);
+  matchViews();
   $('views').replaceChildren();
   for (const v of views) {
     const row = Object.assign(document.createElement('div'), { className: 'view' });
     const name = Object.assign(document.createElement('span'), { textContent: v.name || v.id });
-    const light = Object.assign(document.createElement('button'), { textContent: 'Tänd', disabled: true });
+    const light = Object.assign(document.createElement('button'), { textContent: 'Tänd', disabled: !count(captured.get(v.id)) });
     const read = Object.assign(document.createElement('button'), { textContent: 'Läs in' });
     read.onclick = async () => {
-      await step(`selectView "${v.name}"`, () => API.view.selectView(v.id));
-      await wait(2000);                               // ge vyn tid att slå igenom innan vi frågar vad som syns
-      const ids = await step('getObjects (synliga i vyn)', visibleObjects);
-      captured.set(v.id, ids);
+      const ids = await captureView(v);
       name.textContent = `${v.name} (${count(ids)} objekt)`;
       light.disabled = !count(ids);
-      log(`  "${v.name}": ${count(ids)} objekt i ${ids.length} modell(er)`);
+      matchViews();
     };
     light.onclick = async () => {
+      applied = null;
       await step('dölj allt', () => API.viewer.setObjectState(undefined, { visible: false }));
       await step(`tänd "${v.name}"`, () => API.viewer.setObjectState({ modelObjectIds: captured.get(v.id) }, { visible: true, color: GREEN }));
     };
@@ -137,6 +468,7 @@ $('btnSpeed').onclick = async () => {
   if (!total) return log('  inga synliga objekt att testa med');
   const flat = ids.flatMap(m => m.objectRuntimeIds.map(id => [m.modelId, id]));
   const size = Math.ceil(flat.length / 10), times = [];
+  applied = null;
   await step('dölj allt', () => API.viewer.setObjectState(undefined, { visible: false }));
   for (let i = 0; i < flat.length; i += size) {
     const byModel = new Map();
@@ -157,6 +489,9 @@ $('btnCopy').onclick = () => navigator.clipboard.writeText($('log').textContent)
   () => { $('btnCopy').textContent = 'Kopierad'; setTimeout(() => { $('btnCopy').textContent = 'Kopiera'; }, 1500); },
   () => log('kunde inte kopiera – markera texten och kopiera för hand'));
 
+// Åtkomst från konsolen vid vidareutveckling och test
+window.fourD = { get tasks() { return tasks; }, get views() { return views; }, set views(v) { views = v; }, captured, loadSchedule, matchViews, applyTime,
+                 set api(a) { API = a; }, get applied() { return applied; } };
 connect();
 </script>
 </body>
