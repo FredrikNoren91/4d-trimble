@@ -40,7 +40,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 6</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 7</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -60,6 +60,9 @@
 <div class="row">
   <button id="play" title="Spela upp">▶</button>
   <select id="step" title="Steg vid uppspelning"><option value="1">dag</option><option value="7" selected>vecka</option></select>
+  <select id="speed" title="Hastighet vid uppspelning">
+    <option value="2000">Långsam</option><option value="1000">Lugn</option><option value="500" selected>Normal</option><option value="250">Snabb</option><option value="100">Mycket snabb</option>
+  </select>
   <input id="date" type="date" disabled>
   <span id="week" class="muted"></span>
 </div>
@@ -89,7 +92,7 @@
 </details>
 
 <script>
-const VERSION = 6;
+const VERSION = 7;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -490,12 +493,20 @@ $('play').addEventListener('click', async () => {
   applied = null;
   applyTime();
   $('play').textContent = '⏸';
-  timer = setInterval(() => {
-    s.value = Math.min(+s.max, +s.value + +$('step').value);
-    applyTime();
-    if (+s.value >= +s.max) stop();
-  }, 500);
+  timer = setInterval(tick, +$('speed').value);
 });
+function tick() {
+  const s = $('slider');
+  s.value = Math.min(+s.max, +s.value + +$('step').value);
+  applyTime();
+  if (+s.value >= +s.max) stop();
+}
+// Byte av hastighet slår igenom direkt, även mitt i en uppspelning
+$('speed').addEventListener('change', () => {
+  try { localStorage.setItem('4d.speed', $('speed').value); } catch {}
+  if (timer) { clearInterval(timer); timer = setInterval(tick, +$('speed').value); }
+});
+try { const v = localStorage.getItem('4d.speed'); if (v && [...$('speed').options].some(o => o.value === v)) $('speed').value = v; } catch {}
 $('showUnlinked').addEventListener('change', async () => {
   if (!API) return;
   try { await resetViewer(); await applyTime(); } catch {}
