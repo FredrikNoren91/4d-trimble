@@ -43,7 +43,7 @@
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 </head>
 <body>
-<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 16</span></h1>
+<h1>4D <span class="muted" style="font-weight:400;font-size:11px">version 17</span></h1>
 <div id="status" class="muted">Ansluter till Trimble Connect…</div>
 
 <h2>Tidplan</h2>
@@ -112,7 +112,7 @@
 <div class="muted" style="margin-top:16px;font-size:11px">Utvecklad av Fredrik Norén, Swedish Concrete</div>
 
 <script>
-const VERSION = 16;
+const VERSION = 17;
 const $ = id => document.getElementById(id);
 const GREEN = { r: 46, g: 158, b: 79, a: 255 };          // används bara av testknapparna
 const COLOR_ACTIVE = { r: 235, g: 0, b: 0, a: 255 };     // pågår: klarrött
@@ -197,12 +197,17 @@ async function captureView(v) {
 /* ============================================================
    Tidplan (Asta Powerproject: export till MS Project XML eller CSV)
    ============================================================ */
+// Tål veckodag före datumet (t.ex. "mån 2026-10-12") och svenska månadsnamn ("12 okt 2026")
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 function parseDate(s) {
   s = String(s || '').trim();
-  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/);
+  let m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/);
   if (m) return { d: new Date(+m[1], m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)), time: m[4] != null };
-  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  m = s.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?/);
   if (m) return { d: new Date(m[3].length === 2 ? 2000 + +m[3] : +m[3], m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)), time: m[4] != null };
+  m = s.match(/(\d{1,2})\s+([a-zåäö]{3})[a-zåäö]*\.?\s+(\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?/i);
+  if (m && MONTHS.includes(m[2].toLowerCase().replace('may', 'maj').replace('oct', 'okt')))
+    return { d: new Date(m[3].length === 2 ? 2000 + +m[3] : +m[3], MONTHS.indexOf(m[2].toLowerCase().replace('may', 'maj').replace('oct', 'okt')), +m[1], +(m[4] || 0), +(m[5] || 0)), time: m[4] != null };
   return null;
 }
 // Slutdatum utan klockslag räknas till och med hela den dagen.
@@ -236,9 +241,7 @@ function parseMspXml(text) {
   return out;
 }
 
-function parseCsv(text) {
-  const first = text.split(/\r?\n/, 1)[0];
-  const delim = [';', '\t', ','].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+function splitCsv(text, delim) {
   const rows = []; let row = [], cell = '', q = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
@@ -249,16 +252,38 @@ function parseCsv(text) {
     else if (ch !== '\r') cell += ch;
   }
   if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim()));
+}
+
+// En kommaseparerad export som öppnats i svenskt Excel och sparats igen hamnar som en enda kolumn per rad,
+// delad vid varje ; (t.ex. i Kommentarer) och utfylld med ;;; i slutet. Sätt ihop raderna till originalet igen.
+function unwrapExcel(text) {
+  return splitCsv(text, ';').map(r => {
+    while (r.length && !r[r.length - 1].trim()) r.pop();
+    return r.join(';');
+  }).join('\n');
+}
+
+function parseCsv(text, unwrapped = false) {
+  const first = text.split(/\r?\n/, 1)[0];
+  const delim = [';', '\t', ','].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const rows = splitCsv(text, delim);
 
   const head = rows.shift().map(h => h.trim());
   const col = re => head.findIndex(h => re.test(h));
   const cName = col(/^(namn|name|aktivitet|aktivitetsnamn|benämning|beskrivning|task name)$/i);
   const cStart = col(/^(start|startdatum|starttid|tidig start|early start)$/i);
   const cFin = col(/^(slut|slutdatum|sluttid|färdig|finish|end|tidigt slut|early finish)$/i);
-  const cId = col(/^(id|uid|unikt id|unique id|aktivitets-id|aktivitetsid)$/i);
+  const cId = col(/^(id|uid|unikt id|unique id|aktivitets-id|aktivitetsid|akt\.?\s*kod|aktivitetskod)$/i);
   const cKom = col(RE_KOMMENTAR), c4d = cKom >= 0 ? cKom : col(RE_4D);     // Kommentarer går före en 4D-kolumn
-  if (cName < 0 || cStart < 0)
-    throw new Error(`Hittar inte kolumnerna Namn och Start. Kolumner i filen: ${head.join(', ')}`);
+  if (cName < 0 || cStart < 0) {
+    if (!unwrapped && /[,;]/.test(head.join(''))) {
+      const inner = unwrapExcel(text);
+      try { const out = parseCsv(inner, true); log('tidplan: filen var omsparad i Excel som en enda kolumn – raderna har satts ihop igen'); return out; }
+      catch {}
+    }
+    throw new Error(`Hittar inte kolumnerna Namn och Start. Kolumner i filen: ${head.join(' | ')}`);
+  }
   const out = [];
   for (const r of rows) {
     const sp = span(r[cStart], cFin >= 0 ? r[cFin] : ''), name = (r[cName] || '').trim();
@@ -267,6 +292,8 @@ function parseCsv(text) {
     const link = c4d < 0 ? '' : c4d === head.length - 1 && delim === ';' ? r.slice(c4d).join(';') : r[c4d] || '';
     out.push({ id: (cId >= 0 && (r[cId] || '').trim()) || name, name, ...sp, defFilter: link.replace(/;+\s*$/, '').trim() });
   }
+  if (!out.length && rows.length)
+    throw new Error(`Kolumnerna hittades men inga datum gick att läsa, t.ex. Start = "${rows[0][cStart] ?? ''}".`);
   return out;
 }
 
